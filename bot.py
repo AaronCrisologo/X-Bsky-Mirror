@@ -65,11 +65,23 @@ def get_latest_tweet_data():
 # === Bluesky: Check if already posted ===
 def is_already_posted(client, new_text):
     try:
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=1, filter='posts_no_replies')
-        if response.feed:
-            latest_post = response.feed[0].post.record
-            if latest_post.text.strip() == new_text.strip():
+        # Check the last 5 posts to be sure
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=5, filter='posts_no_replies')
+        
+        # Clean the new text for comparison
+        new_text_clean = new_text.strip().lower()
+
+        for view in response.feed:
+            existing_text = view.post.record.text.strip().lower()
+            
+            # 1. Exact match check
+            if existing_text == new_text_clean:
                 return True
+            
+            # 2. "First 100" check (prevents duplicates with minor formatting differences)
+            if len(new_text_clean) > 50 and new_text_clean[:100] == existing_text[:100]:
+                return True
+                
     except Exception as e:
         print(f"Error checking Bluesky feed: {e}")
     return False
@@ -107,7 +119,7 @@ def main():
         post_text and
         is_recent and
         post_text != last_posted_text and
-        not is_already_posted(client, post_text[:290])
+        not is_already_posted(client, post_text)
     )
 
     if has_new_content:
