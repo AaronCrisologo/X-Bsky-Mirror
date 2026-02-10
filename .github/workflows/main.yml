@@ -1,8 +1,7 @@
 name: Twitter to Bluesky Bot
 on:
   schedule:
-    - cron: '15 5 * * *'
-    - cron: '10 22 * * *'
+    - cron: '20 6 * * *'  # This is 2:20 PM your time
   workflow_dispatch:
 
 jobs:
