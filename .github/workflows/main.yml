@@ -1,11 +1,10 @@
 name: Twitter to Bluesky Bot
 on:
-  schedule:
-    - cron: '31 3 * * *' 
-    - cron: '02 5 * * *' 
-    - cron: '3 20 * * *' 
-    - cron: '4 21 * * *' 
+  # Keep manual trigger
   workflow_dispatch:
+  # Add this for cron-job.org
+  repository_dispatch:
+    types: [trigger-my-bot]
 
 jobs:
   run-bot:
