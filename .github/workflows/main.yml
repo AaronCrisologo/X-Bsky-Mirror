@@ -1,9 +1,9 @@
 name: Cron Schedule Test
 on:
   schedule:
-    - cron: '15 7 * * *'  # 3:15 PM PHT (07:15 UTC)
-    - cron: '20 7 * * *'  # 3:20 PM PHT (07:20 UTC)
-    - cron: '25 7 * * *'  # 3:25 PM PHT (07:25 UTC)
+    - cron: '12 11 * * *'  # 7:12 PM PHT (Next hour)
+    - cron: '37 11 * * *'  # 7:37 PM PHT
+    - cron: '53 11 * * *'  # 7:53 PM PHT
   workflow_dispatch:
 
 jobs:
