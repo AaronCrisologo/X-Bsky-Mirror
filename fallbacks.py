@@ -4,7 +4,7 @@ import os
 KEYWORD_MAP = {
     "pickup summon": "summon_fallback.jpg",
     "event": "event_fallback.jpg",
-    "learning with manga": "Learning.png",
+    "learning with manga": "learning.png",
     "exchange ticket": "ticket_fallback.jpg",
     "achieved": "achieved.jpg",
     "debuts": "debut_fallback.jpg",
