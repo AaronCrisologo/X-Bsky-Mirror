@@ -38,40 +38,50 @@ async function getLatestTweet(username) {
         // --- NEW SCROLL & COLLECT LOGIC ---
         const tweetData = await page.evaluate(async () => {
             const results = [];
-
-            // Scroll down 3 times to ensure the "Pinned" tweet isn't the only thing there
             for (let i = 0; i < 3; i++) {
                 const articles = Array.from(document.querySelectorAll('article'));
-
                 articles.forEach(article => {
                     const timeEl = article.querySelector('time');
                     const textEl = article.querySelector('[data-testid="tweetText"]');
                     const pinCheck = article.innerText.includes('Pinned');
+                    
+                    // Detect if there's a video or GIF
+                    const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
 
                     if (timeEl) {
                         results.push({
                             text: textEl ? textEl.innerText : "",
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
+                            hasVideo: hasVideo, // Added flag
                             images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
                         });
                     }
                 });
-
                 window.scrollBy(0, 800);
                 await new Promise(r => setTimeout(r, 1500));
             }
-
-            // 1. Filter out duplicates and pinned tweets
+            
             const cleanList = results.filter((v, i, a) =>
                 a.findIndex(t => t.time === v.time) === i && !v.isPinned
             );
-
-            // 2. Sort by absolute time (Newest first)
             cleanList.sort((a, b) => new Date(b.time) - new Date(a.time));
-
             return cleanList[0];
         });
+
+        // If it's a video or has no images, we won't try to download anything
+        // The Python script will handle the fallback logic.
+        if (tweetData && tweetData.images.length > 0) {
+            for (let i = 0; i < tweetData.images.length; i++) {
+                const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
+                try {
+                    const viewSource = await page.goto(highResUrl);
+                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
+                } catch (e) {
+                    process.stderr.write(`Failed image ${i}: ${e.message}\n`);
+                }
+            }
+        }
 
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
