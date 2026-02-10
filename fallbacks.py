@@ -4,8 +4,8 @@ import os
 KEYWORD_MAP = {
     "pickup summon": "summon_fallback.jpg",
     "event": "event_fallback.jpg",
-    "Learning with Manga": "Learning.png".
-    "exchange ticket": "ticket_fallback.jpg",
+    "Learning with Manga": "Learning.png",
+    "exchange ticket": "ticket_fallback.jpg"
 }
 
 # 2. Define the "Safety Net" image (used if no keywords match)
