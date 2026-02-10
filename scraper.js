@@ -1,3 +1,5 @@
+process.stdout.setEncoding('utf8');
+
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
@@ -50,7 +52,7 @@ async function getLatestTweet(username) {
 
                     if (timeEl) {
                         results.push({
-                            text: textEl ? textEl.innerText : "",
+                            text: textEl ? textEl.textContent : "",
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
                             hasVideo: hasVideo, // Added flag
