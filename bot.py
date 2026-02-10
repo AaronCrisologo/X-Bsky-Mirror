@@ -180,23 +180,26 @@ def main():
                     print(f"Warning: Fallback image {chosen_fallback} not found.")
 
             # 3. Post to Bluesky
+            # Create a builder that automatically finds links and tags
+            text_builder = client_utils.TextBuilder()
+            text_builder.text(display_text)
+            
             if len(images_to_upload) == 1:
                 client.send_image(
-                    text=display_text,
+                    text=text_builder,
                     image=images_to_upload[0],
                     image_alt="Fate/GO Update",
                     image_aspect_ratio=aspect_ratios[0]
                 )
             elif len(images_to_upload) > 1:
                 client.send_images(
-                    text=display_text,
+                    text=text_builder,
                     images=images_to_upload,
                     image_alts=[""] * len(images_to_upload),
                     image_aspect_ratios=aspect_ratios
                 )
             else:
-                # Absolute fallback if even the local image is missing
-                client.send_post(text=display_text)
+                client.send_post(text_builder)
 
             print(f"✅ Successfully posted: {display_text[:50]}...")
             last_posted_text = post_text  # Update local tracker
