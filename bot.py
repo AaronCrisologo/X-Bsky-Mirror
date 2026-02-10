@@ -115,7 +115,10 @@ def main():
       if (now - tweet_datetime).days < 2:
           is_recent = True
 
-    post_text = tweet_data.get('text', '').strip() if tweet_data else ""
+    raw_text = tweet_data.get('text', '') if tweet_data else ""
+    # This joins multi-line links back together if they were split by the scraper
+    post_text = "\n".join([line.strip() for line in raw_text.splitlines()]).strip()
+    
     has_new_content = (
         tweet_data and
         post_text and
