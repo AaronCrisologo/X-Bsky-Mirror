@@ -180,26 +180,52 @@ def main():
                     print(f"Warning: Fallback image {chosen_fallback} not found.")
 
             # 3. Post to Bluesky
-            # Create a builder that automatically finds links and tags
-            text_builder = client_utils.TextBuilder()
-            text_builder.text(display_text)
+            # Create a builder and use the built-in automatic parser
+            tb = client_utils.TextBuilder()
             
+            # This helper will automatically detect https:// links and #hashtags
+            post_text_with_facets = client_utils.TextBuilder()
+            
+            # Split text by lines or spaces to handle items, or use the smarter helper:
+            # The easiest way to handle mixed text, emojis, and links is this:
+            lines = display_text.split('\n')
+            for i, line in enumerate(lines):
+                words = line.split(' ')
+                for j, word in enumerate(words):
+                    if word.startswith('http'):
+                        post_text_with_facets.link(word, word)
+                    elif word.startswith('#'):
+                        # Remove punctuation from tag if necessary
+                        tag = word.strip('#').strip('!?,.')
+                        post_text_with_facets.tag(word, tag)
+                    else:
+                        post_text_with_facets.text(word)
+                    
+                    # Add space back if not the last word
+                    if j < len(words) - 1:
+                        post_text_with_facets.text(' ')
+                
+                # Add newline back if not the last line
+                if i < len(lines) - 1:
+                    post_text_with_facets.text('\n')
+            
+            # Use 'post_text_with_facets' instead of 'text_builder' in your send calls
             if len(images_to_upload) == 1:
                 client.send_image(
-                    text=text_builder,
+                    text=post_text_with_facets,
                     image=images_to_upload[0],
                     image_alt="Fate/GO Update",
                     image_aspect_ratio=aspect_ratios[0]
                 )
             elif len(images_to_upload) > 1:
                 client.send_images(
-                    text=text_builder,
+                    text=post_text_with_facets,
                     images=images_to_upload,
                     image_alts=[""] * len(images_to_upload),
                     image_aspect_ratios=aspect_ratios
                 )
             else:
-                client.send_post(text_builder)
+                client.send_post(post_text_with_facets)
 
             print(f"✅ Successfully posted: {display_text[:50]}...")
             last_posted_text = post_text  # Update local tracker
