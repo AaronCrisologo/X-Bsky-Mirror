@@ -2,7 +2,7 @@ from fallbacks import get_fallback_image
 
 import time
 import datetime
-from atproto import Client
+from atproto import Client, client_utils
 import subprocess
 import json
 import os
