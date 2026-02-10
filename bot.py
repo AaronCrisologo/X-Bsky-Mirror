@@ -6,6 +6,7 @@ from atproto import Client
 import subprocess
 import json
 import os
+import sys
 from PIL import Image
 
 # === CONFIGURATION ===
@@ -22,16 +23,19 @@ FETCH_TIMEOUT = 30  # Max seconds to wait for scraper (just in case)
 
 def get_latest_tweet_data():
     try:
-        # 1. Added errors='replace' to handle any stray non-utf8 bytes
-        # 2. Added shell=True (often helpful on Windows for node calls)
+        # Force the environment to recognize UTF-8
+        my_env = os.environ.copy()
+        my_env["PYTHONIOENCODING"] = "utf-8"
+
         result = subprocess.run(
             ['node', 'scraper.js'],
             capture_output=True,
             text=True,
             encoding='utf-8',
-            errors='replace', # This prevents the UnicodeDecodeError crash
-            timeout=FETCH_TIMEOUT,
-            check=False
+            # REMOVE errors='replace' to see if it throws a specific error 
+            # OR use 'strict' to debug.
+            env=my_env, 
+            timeout=FETCH_TIMEOUT
         )
 
         if result.stderr:
