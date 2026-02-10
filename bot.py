@@ -1,3 +1,5 @@
+from fallbacks import get_fallback_image
+
 import time
 import datetime
 from atproto import Client
@@ -7,9 +9,8 @@ import os
 from PIL import Image
 
 # === CONFIGURATION ===
-BSKY_HANDLE = "fatego-na.bsky.social"
+BSKY_HANDLE = os.getenv("BSKY_USER")
 BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
-FALLBACK_IMAGE = "fallback.jpg"
 
 # Scheduled check times in UTC (5:15 AM and 10:10 PM)
 SCHEDULED_TIMES = [
@@ -143,14 +144,19 @@ def main():
                     with open(filename, 'rb') as f:
                         images_to_upload.append(f.read())
 
-            # 2. FALLBACK LOGIC: If it's a video or text-only, use your local image
-            if (has_video or not images_to_upload) and os.path.exists(FALLBACK_IMAGE):
-                print(f"No images found (Video: {has_video}). Using fallback image.")
-                with Image.open(FALLBACK_IMAGE) as img:
-                    w, h = img.size
-                    aspect_ratios = [{"width": w, "height": h}]
-                with open(FALLBACK_IMAGE, 'rb') as f:
-                    images_to_upload = [f.read()]
+            # 2. FALLBACK LOGIC: If it's a video or text-only, use keyword-based fallback
+            if (has_video or not images_to_upload):
+                chosen_fallback = get_fallback_image(post_text)
+                
+                if os.path.exists(chosen_fallback):
+                    print(f"Using keyword-based fallback: {chosen_fallback}")
+                    with Image.open(chosen_fallback) as img:
+                        w, h = img.size
+                        aspect_ratios = [{"width": w, "height": h}]
+                    with open(chosen_fallback, 'rb') as f:
+                        images_to_upload = [f.read()]
+                else:
+                    print(f"Warning: Fallback image {chosen_fallback} not found.")
 
             # 3. Post to Bluesky
             if len(images_to_upload) == 1:
