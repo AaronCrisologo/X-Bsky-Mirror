@@ -4,9 +4,12 @@ import os
 KEYWORD_MAP = {
     "pickup summon": "summon_fallback.jpg",
     "event": "event_fallback.jpg",
-    "Learning with Manga": "Learning.png",
+    "learning with manga": "Learning.png",
     "exchange ticket": "ticket_fallback.jpg",
-    "achieved": "achieved.jpg"
+    "achieved": "achieved.jpg",
+    "debuts": "debut_fallback.jpg",
+    "short animation": "fujimaru.jpg",
+    "ordeal call": "ordeal_fgo.jpg"
 }
 
 # 2. Define the "Safety Net" image (used if no keywords match)
