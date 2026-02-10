@@ -108,6 +108,10 @@ def main():
 
     tweet_data = get_latest_tweet_data()
 
+    if not tweet_data:
+        print("No tweet data received from scraper. Skipping this run.")
+        return
+
     # Parse the timestamp from the tweet
     tweet_time_str = tweet_data.get('time', '')
     is_recent = False
@@ -122,6 +126,16 @@ def main():
     raw_text = tweet_data.get('text', '') if tweet_data else ""
     # This joins multi-line links back together if they were split by the scraper
     post_text = "\n".join([line.strip() for line in raw_text.splitlines()]).strip()
+
+    # Inside main(), after getting post_text:
+    if post_text:
+        # Remove newlines that split "https://" and the URL
+        post_text = post_text.replace("https://\n", "https://")
+        post_text = post_text.replace("http://\n", "http://")
+    
+    # Also clean up any triple-newlines caused by the scraper
+    while "\n\n\n" in post_text:
+        post_text = post_text.replace("\n\n\n", "\n\n")
     
     has_new_content = (
         tweet_data and
