@@ -3,7 +3,7 @@ on:
   schedule:
     - cron: '12 11 * * *'  # 7:12 PM PHT (Next hour)
     - cron: '37 11 * * *'  # 7:37 PM PHT
-    - cron: '30 10 * * *'  # 7:53 PM PHT
+    - cron: '38 10 * * *'  # 7:53 PM PHT
   workflow_dispatch:
 
 jobs:
