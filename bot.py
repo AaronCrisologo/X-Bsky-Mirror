@@ -9,6 +9,7 @@ from PIL import Image
 # === CONFIGURATION ===
 BSKY_HANDLE = "fatego-na.bsky.social"
 BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
+FALLBACK_IMAGE = "fallback.jpg"
 
 # Scheduled check times in UTC (5:15 AM and 10:10 PM)
 SCHEDULED_TIMES = [
@@ -123,29 +124,40 @@ def main():
     )
 
     if has_new_content:
-        print("New content detected. Posting now...")
+        print("New content detected. Processing...")
         try:
             display_text = post_text[:290] + "..." if len(post_text) > 300 else post_text
             image_urls = tweet_data.get('images', [])
+            has_video = tweet_data.get('hasVideo', False)
+            
             images_to_upload = []
             aspect_ratios = []
 
-            # Download or use existing images
+            # 1. Try to load scraped images first
             for i in range(len(image_urls)):
                 filename = f"tweet_img_{i}.jpg"
                 if os.path.exists(filename):
                     with Image.open(filename) as img:
-                        width, height = img.size
-                        aspect_ratios.append({"width": width, "height": height})
+                        w, h = img.size
+                        aspect_ratios.append({"width": w, "height": h})
                     with open(filename, 'rb') as f:
                         images_to_upload.append(f.read())
 
-            # Post based on image count
+            # 2. FALLBACK LOGIC: If it's a video or text-only, use your local image
+            if (has_video or not images_to_upload) and os.path.exists(FALLBACK_IMAGE):
+                print(f"No images found (Video: {has_video}). Using fallback image.")
+                with Image.open(FALLBACK_IMAGE) as img:
+                    w, h = img.size
+                    aspect_ratios = [{"width": w, "height": h}]
+                with open(FALLBACK_IMAGE, 'rb') as f:
+                    images_to_upload = [f.read()]
+
+            # 3. Post to Bluesky
             if len(images_to_upload) == 1:
                 client.send_image(
                     text=display_text,
                     image=images_to_upload[0],
-                    image_alt="",
+                    image_alt="Fate/GO Update",
                     image_aspect_ratio=aspect_ratios[0]
                 )
             elif len(images_to_upload) > 1:
@@ -156,6 +168,7 @@ def main():
                     image_aspect_ratios=aspect_ratios
                 )
             else:
+                # Absolute fallback if even the local image is missing
                 client.send_post(text=display_text)
 
             print(f"✅ Successfully posted: {display_text[:50]}...")
