@@ -5,7 +5,8 @@ KEYWORD_MAP = {
     "pickup summon": "summon_fallback.jpg",
     "event": "event_fallback.jpg",
     "Learning with Manga": "Learning.png",
-    "exchange ticket": "ticket_fallback.jpg"
+    "exchange ticket": "ticket_fallback.jpg",
+    "achieved": "achieved.jpg"
 }
 
 # 2. Define the "Safety Net" image (used if no keywords match)
