@@ -47,24 +47,13 @@ async function getLatestTweet(username) {
                     const timeEl = article.querySelector('time');
                     const textEl = article.querySelector('[data-testid="tweetText"]');
                     const pinCheck = article.innerText.includes('Pinned');
-                
-                    // NEW: Check for video thumbnails
-                    const videoThumbnails = Array.from(article.querySelectorAll('[data-testid="videoPlayer"] img, [data-testid="drive-video-player"] img'))
-                        .map(img => img.src);
-                
-                    // Existing photo logic
-                    const photoUrls = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img'))
-                        .map(img => img.src);
-                
-                    // Combine them (prioritize photos, then videos)
-                    const allImages = [...photoUrls, ...videoThumbnails];
-                
+
                     if (timeEl) {
                         results.push({
                             text: textEl ? textEl.innerText : "",
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
-                            images: allImages // Now includes video thumbnails!
+                            images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
                         });
                     }
                 });
@@ -87,17 +76,11 @@ async function getLatestTweet(username) {
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
-                let imageUrl = tweetData.images[i];
-                
-                // If it's a standard Twitter image, force high res
-                // Video thumbnails often don't need '?name=orig' but it doesn't hurt to try
-                const highResUrl = imageUrl.includes('pbs.twimg.com') 
-                    ? imageUrl.split('?')[0] + '?name=large' 
-                    : imageUrl;
-        
+                // Force original quality
+                const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
                 try {
-                    const response = await page.goto(highResUrl, { waitUntil: 'networkidle2' });
-                    fs.writeFileSync(`tweet_img_${i}.jpg`, await response.buffer());
+                    const viewSource = await page.goto(highResUrl);
+                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
                 } catch (e) {
                     process.stderr.write(`Failed image ${i}: ${e.message}\n`);
                 }
