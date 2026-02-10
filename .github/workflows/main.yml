@@ -30,6 +30,7 @@ jobs:
 
       - name: Run Bot
         env:
+          BSKY_USER: ${{ secrets.BSKY_USER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
           X_CT0: ${{ secrets.X_CT0 }}
