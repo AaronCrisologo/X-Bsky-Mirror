@@ -179,42 +179,33 @@ def main():
                 else:
                     print(f"Warning: Fallback image {chosen_fallback} not found.")
 
-            # 3. Post to Bluesky
-            # Create a builder and use the built-in automatic parser
-            tb = client_utils.TextBuilder()
+            # === 3. Post to Bluesky ===
+            from atproto import client_utils
             
-            # This helper will automatically detect https:// links and #hashtags
+            # Ensure we don't slice in the middle of a complex emoji
+            # Use byte-length for Bluesky's 300-byte limit
+            if len(display_text.encode('utf-8')) > 300:
+                display_text = display_text[:290] + "..."
+
+            # Create the builder
             post_text_with_facets = client_utils.TextBuilder()
             
-            # Split text by lines or spaces to handle items, or use the smarter helper:
-            # The easiest way to handle mixed text, emojis, and links is this:
-            lines = display_text.split('\n')
-            for i, line in enumerate(lines):
-                words = line.split(' ')
-                for j, word in enumerate(words):
-                    if word.startswith('http'):
-                        post_text_with_facets.link(word, word)
-                    elif word.startswith('#'):
-                        # Remove punctuation from tag if necessary
-                        tag = word.strip('#').strip('!?,.')
-                        post_text_with_facets.tag(word, tag)
-                    else:
-                        post_text_with_facets.text(word)
-                    
-                    # Add space back if not the last word
-                    if j < len(words) - 1:
-                        post_text_with_facets.text(' ')
-                
-                # Add newline back if not the last line
-                if i < len(lines) - 1:
-                    post_text_with_facets.text('\n')
+            # parse_text finds #tags and https:// links and creates the blue "facets"
+            # It handles emojis natively so they don't break.
+            for segment in client_utils.parse_text(display_text):
+                if segment.type == 'link':
+                    post_text_with_facets.link(segment.text, segment.link)
+                elif segment.type == 'tag':
+                    post_text_with_facets.tag(segment.text, segment.tag)
+                else:
+                    post_text_with_facets.text(segment.text)
             
-            # Use 'post_text_with_facets' instead of 'text_builder' in your send calls
+            # Send the post
             if len(images_to_upload) == 1:
                 client.send_image(
                     text=post_text_with_facets,
                     image=images_to_upload[0],
-                    image_alt="Fate/GO Update",
+                    image_alt="Update",
                     image_aspect_ratio=aspect_ratios[0]
                 )
             elif len(images_to_upload) > 1:
@@ -227,8 +218,8 @@ def main():
             else:
                 client.send_post(post_text_with_facets)
 
-            print(f"✅ Successfully posted: {display_text[:50]}...")
-            last_posted_text = post_text  # Update local tracker
+            print(f"✅ Successfully posted with working links/emojis!")
+            last_posted_text = post_text 
 
             # Cleanup image files
             for i in range(len(image_urls)):
