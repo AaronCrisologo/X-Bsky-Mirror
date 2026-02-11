@@ -113,7 +113,12 @@ def main():
         print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
         
         tweet_data = {
-            'text': "Lorem #ipsum www.google.com 🌙 anime.fate-go.us youtu.be/loMGysqsx48",
+            'text': """★5 (SSR) Andromeda, a sacrificial maiden described in Greek mythology, is a new Servant available during the Valentine's 2026 Pickup Summon!
+
+
+
+More info ➡️ fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0203_valentine_2026_pu%2F
+#FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
@@ -194,14 +199,17 @@ def main():
             # 2. Logic for Truncation and Alt Text
             display_text = post_text
             if len(display_text.encode('utf-8')) > 300:
-                while len(display_text.encode('utf-8')) > 295:
+                # Cut back to 290 to be safe
+                while len(display_text.encode('utf-8')) > 290:
                     display_text = display_text[:-1]
-                display_text += "..."
-                final_alt_text = post_text # Full text goes to Alt
+                
+                # IMPORTANT: Add a space before the ellipsis if the last character is part of a URL
+                # This prevents the ellipsis from "sticking" to the link
+                display_text = display_text.strip() + "..."
+                final_alt_text = post_text 
 
             # 3. Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
-            
             pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|#\w+)')
             last_idx = 0
             
@@ -214,19 +222,32 @@ def main():
                 if item.startswith('#'):
                     post_text_with_facets.tag(item, item[1:])
                 else:
+                    # 1. Prepare the Destination URI (The actual working link)
                     uri = item
+                    # Strip any truncation dots from the actual URL
+                    uri = uri.replace('...', '').replace('…', '')
+                    
                     if not uri.startswith('http'):
                         uri = f'https://{uri}'
-                    
-                    # Clean up trailing punctuation (like a period at the end of a sentence)
+
+                    # 2. Prepare the Display Item (What users see)
+                    display_item = item
+                    # If the link is too long, shorten it visually
+                    if len(display_item) > 30:
+                        display_item = display_item[:27] + "..."
+
+                    # 3. Clean up trailing punctuation from the URI
                     if uri.endswith(('.', ',', '!', '?')):
                         punctuation = uri[-1]
                         uri = uri[:-1]
-                        item = item[:-1]
-                        post_text_with_facets.link(item, uri)
+                        # If our shortened display item ends with that punctuation, strip it
+                        if display_item.endswith(punctuation):
+                            display_item = display_item[:-1]
+                        
+                        post_text_with_facets.link(display_item, uri)
                         post_text_with_facets.text(punctuation)
                     else:
-                        post_text_with_facets.link(item, uri)
+                        post_text_with_facets.link(display_item, uri)
                 
                 last_idx = end
             
