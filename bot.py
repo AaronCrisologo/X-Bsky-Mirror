@@ -113,7 +113,7 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec fringilla, ante nec tincidunt congue, neque sem pulvinar justo, vitae tempus nulla ipsum a magna. Quisque dapibus arcu ligula, at mollis nulla interdum vitae. Vestibulum lobortis euismod faucibus. Proin et ornare tortor. Integer fringilla nunc nec tortor dignissim, eu dictum est maximus. Nunc sit amet sapien convallis, tristique sapien in, luctus nulla. Integer convallis vulputate ante ac maximus. Aliquam malesuada auctor massa nunc.",
+            'text': "Lorem ipsum",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
