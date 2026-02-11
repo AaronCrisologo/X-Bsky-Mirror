@@ -113,7 +113,7 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "This is a simulated post! 🤧 Testing links: https://google.com and #Python hashtags.",
+            'text': "TEST: This post is dense with emojis! 🚀🔥✨🌈🍄💠🌀🧿🔮🎭🎨🎰🎳🎯🎬🎤🎧🎫🎟️🏅🥇🥈🥉🏆🏏🏑🏒🏓🏸🥊🥋🥅⛳️⛸️🎣🚣🏊🏄🛀⛹️🏋️🚴🚵🏎️🏍️🤸🤼🤽🤾🤺🤹🧗🧘🧖🛌👯🗣️👤👥🤺 If you see this at the end of the post, the truncation failed to trigger early enough for byte safety. 🛑",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
