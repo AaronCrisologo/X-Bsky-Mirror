@@ -93,7 +93,9 @@ def is_already_posted(client, new_text):
     return False
 
 
-# === Main Loop ===
+# === CONFIGURATION ===
+SIMULATION_MODE = True  # Set to False to use the real scraper
+
 def main():
     client = Client()
     try:
@@ -102,14 +104,22 @@ def main():
         print(f"Failed to login to Bluesky: {e}")
         return
 
-    last_posted_text = ""  # Local cache to reduce API calls
+    print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
 
-    print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Checking for new tweet...")
-
-    tweet_data = get_latest_tweet_data()
+    # === HARDCODED DATA SIMULATION ===
+    if SIMULATION_MODE:
+        tweet_data = {
+            'text': "This is a simulated post! 🚀 Testing links: https://google.com and #Python hashtags.",
+            'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'images': [], # You can add local paths here if you have test images
+            'hasVideo': False
+        }
+    else:
+        tweet_data = get_latest_tweet_data()
+    # =================================
 
     if not tweet_data:
-        print("No tweet data received from scraper. Skipping this run.")
+        print("No tweet data received. Skipping.")
         return
 
     # Parse the timestamp from the tweet
