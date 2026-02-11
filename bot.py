@@ -7,6 +7,7 @@ import subprocess
 import json
 import os
 import sys
+import re
 from PIL import Image
 
 # === CONFIGURATION ===
@@ -93,23 +94,36 @@ def is_already_posted(client, new_text):
     return False
 
 
-# === Main Loop ===
+# === CONFIGURATION ===
+SIMULATION_MODE = True  # Set to False to use the real scraper
+
 def main():
     client = Client()
+
+    last_posted_text = ""
+    
     try:
         client.login(BSKY_HANDLE, BSKY_PASSWORD)
     except Exception as e:
         print(f"Failed to login to Bluesky: {e}")
         return
 
-    last_posted_text = ""  # Local cache to reduce API calls
+    print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
 
-    print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Checking for new tweet...")
-
-    tweet_data = get_latest_tweet_data()
+    # === HARDCODED DATA SIMULATION ===
+    if SIMULATION_MODE:
+        tweet_data = {
+            'text': "This is a simulated post! 🤧 Testing links: https://google.com and #Python hashtags.",
+            'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'images': [], # You can add local paths here if you have test images
+            'hasVideo': False
+        }
+    else:
+        tweet_data = get_latest_tweet_data()
+    # =================================
 
     if not tweet_data:
-        print("No tweet data received from scraper. Skipping this run.")
+        print("No tweet data received. Skipping.")
         return
 
     # Parse the timestamp from the tweet
@@ -180,46 +194,53 @@ def main():
                     print(f"Warning: Fallback image {chosen_fallback} not found.")
 
             # === 3. Post to Bluesky ===
-            from atproto import client_utils
             
-            # Ensure we don't slice in the middle of a complex emoji
-            # Use byte-length for Bluesky's 300-byte limit
+            # 1. Safe Truncation (Keep it under 300 bytes)
             if len(display_text.encode('utf-8')) > 300:
-                display_text = display_text[:290] + "..."
-
-            # Create the builder
+                while len(display_text.encode('utf-8')) > 295:
+                    display_text = display_text[:-1]
+                display_text += "..."
+            
+            # 2. Build Rich Text with Facets (Links & Tags)
             post_text_with_facets = client_utils.TextBuilder()
             
-            # parse_text finds #tags and https:// links and creates the blue "facets"
-            # It handles emojis natively so they don't break.
-            for segment in client_utils.parse_text(display_text):
-                if segment.type == 'link':
-                    post_text_with_facets.link(segment.text, segment.link)
-                elif segment.type == 'tag':
-                    post_text_with_facets.tag(segment.text, segment.tag)
-                else:
-                    post_text_with_facets.text(segment.text)
+            # Regex to find URLs and Hashtags
+            # This pattern finds https://... or #tag while keeping the rest as plain text
+            pattern = re.compile(r'(https?://\S+|#\w+)')
+            last_idx = 0
             
-            # Send the post
-            if len(images_to_upload) == 1:
-                client.send_image(
-                    text=post_text_with_facets,
-                    image=images_to_upload[0],
-                    image_alt="Update",
-                    image_aspect_ratio=aspect_ratios[0]
-                )
-            elif len(images_to_upload) > 1:
-                client.send_images(
-                    text=post_text_with_facets,
-                    images=images_to_upload,
-                    image_alts=[""] * len(images_to_upload),
-                    image_aspect_ratios=aspect_ratios
-                )
-            else:
-                client.send_post(post_text_with_facets)
-
-            print(f"✅ Successfully posted with working links/emojis!")
-            last_posted_text = post_text 
+            for match in pattern.finditer(display_text):
+                # Add any plain text BEFORE the link/tag
+                start, end = match.span()
+                post_text_with_facets.text(display_text[last_idx:start])
+                
+                item = match.group()
+                if item.startswith('http'):
+                    # Add as a clickable Blue Link
+                    post_text_with_facets.link(item, item)
+                elif item.startswith('#'):
+                    # Add as a clickable Blue Tag (remove '#' for the metadata)
+                    post_text_with_facets.tag(item, item.replace('#', ''))
+                
+                last_idx = end
+            
+            # Add any remaining text after the last match
+            post_text_with_facets.text(display_text[last_idx:])
+            
+            # 3. Send the post
+            try:
+                if len(images_to_upload) >= 1:
+                    client.send_images(
+                        text=post_text_with_facets,
+                        images=images_to_upload,
+                        image_alts=["Update"] * len(images_to_upload),
+                        image_aspect_ratios=aspect_ratios
+                    )
+                else:
+                    client.send_post(post_text_with_facets)
+                print(f"✅ Posted successfully with blue links and emojis!")
+            except Exception as e:
+                print(f"❌ Post failed: {e}")
 
             # Cleanup image files
             for i in range(len(image_urls)):
