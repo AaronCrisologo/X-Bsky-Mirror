@@ -7,6 +7,7 @@ import subprocess
 import json
 import os
 import sys
+import re
 from PIL import Image
 
 # === CONFIGURATION ===
@@ -112,7 +113,7 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "This is a simulated post! 🚀🙏🔥🤧‼️ Testing links: https://google.com and #Python hashtags.",
+            'text': "This is a simulated post! 🤧 Testing links: https://google.com and #Python hashtags.",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
@@ -193,8 +194,6 @@ def main():
                     print(f"Warning: Fallback image {chosen_fallback} not found.")
 
             # === 3. Post to Bluesky ===
-            import re
-            from atproto import client_utils
             
             # 1. Safe Truncation (Keep it under 300 bytes)
             if len(display_text.encode('utf-8')) > 300:
@@ -228,7 +227,7 @@ def main():
             # Add any remaining text after the last match
             post_text_with_facets.text(display_text[last_idx:])
             
-            # 3. Send the post (same logic as before)
+            # 3. Send the post
             try:
                 if len(images_to_upload) >= 1:
                     client.send_images(
