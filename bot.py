@@ -221,35 +221,33 @@ More info ➡️ fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0203_
                 if item.startswith('#'):
                     post_text_with_facets.tag(item, item[1:])
                 else:
+                    # 1. Prepare the Destination URI (the "real" link)
+                    # Use the original post_text to find the full link if it was truncated
+                    # But for now, let's just clean the current item
                     uri = item
-                    # FIX: Manually strip the ellipsis from the URI if it got caught
-                    if uri.endswith('...'):
-                        uri = uri[:-3]
-                        item = item[:-3]
-                        has_ellipsis = True
-                    elif uri.endswith('…'):
-                        uri = uri[:-1]
-                        item = item[:-1]
-                        has_ellipsis = True
-                    else:
-                        has_ellipsis = False
-
+                    
+                    # Strip ellipses from the URI so it doesn't 404
+                    uri = uri.replace('...', '').replace('…', '')
+                    
                     if not uri.startswith('http'):
                         uri = f'https://{uri}'
+
+                    # 2. Prepare the Display Text (the "pretty" link)
+                    # If it's a long FGO link, we can trim it visually
+                    display_item = item
                     
-                    # Clean up trailing punctuation
+                    # Clean up trailing punctuation from URI only
                     if uri.endswith(('.', ',', '!', '?')):
                         punctuation = uri[-1]
                         uri = uri[:-1]
-                        item = item[:-1]
-                        post_text_with_facets.link(item, uri)
+                        # If the display item also had it, keep it for the text part
+                        if display_item.endswith(punctuation):
+                            display_item = display_item[:-1]
+                        
+                        post_text_with_facets.link(display_item, uri)
                         post_text_with_facets.text(punctuation)
                     else:
-                        post_text_with_facets.link(item, uri)
-                    
-                    # If we stripped an ellipsis, add it back as plain text
-                    if has_ellipsis:
-                        post_text_with_facets.text("...")
+                        post_text_with_facets.link(display_item, uri)
                 
                 last_idx = end
             
