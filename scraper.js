@@ -52,7 +52,7 @@ async function getLatestTweet(username) {
 
                     if (timeEl) {
                         results.push({
-                            text: textEl ? textEl.innerText : "",
+                            text: textEl ? textEl.textContent : "",
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
                             hasVideo: hasVideo, // Added flag
