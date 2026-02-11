@@ -113,12 +113,12 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "★5 (SSR) Andromeda, a sacrificial maiden described in Greek mythology, is a new Servant available during the Valentine's 2026 Pickup Summon!
+            'text': """★5 (SSR) Andromeda, a sacrificial maiden described in Greek mythology, is a new Servant available during the Valentine's 2026 Pickup Summon!
 
 
 
 More info ➡️ fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0203_valentine_2026_pu%2F
-#FateGOUS",
+#FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
