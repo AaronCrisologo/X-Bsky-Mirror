@@ -112,7 +112,7 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "This is a simulated post! 🚀 Testing links: https://google.com and #Python hashtags.",
+            'text': "This is a simulated post! 🚀🙏🔥🤧‼️ Testing links: https://google.com and #Python hashtags.",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
