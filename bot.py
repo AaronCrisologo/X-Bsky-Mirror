@@ -113,7 +113,7 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "Lorem #ipsum www.google.com 🌙",
+            'text': "Lorem #ipsum www.google.com 🌙 anime.fate-go.us  youtu.be/loMGysqsx48",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
@@ -200,17 +200,41 @@ def main():
 
             # 3. Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
-            pattern = re.compile(r'(https?://\S+|#\w+)')
+            
+            # Regex Breakdown:
+            # 1. (https?://\S+) -> Standard links
+            # 2. (www\.\S+) -> Links starting with www
+            # 3. ([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b) -> Subdomains like anime.fate-go.us
+            # 4. (#\w+) -> Hashtags
+            pattern = re.compile(r'(https?://\S+|www\.\S+|[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b|#\w+)')
             last_idx = 0
+            
             for match in pattern.finditer(display_text):
                 start, end = match.span()
                 post_text_with_facets.text(display_text[last_idx:start])
+                
                 item = match.group()
-                if item.startswith('http'):
-                    post_text_with_facets.link(item, item)
-                elif item.startswith('#'):
-                    post_text_with_facets.tag(item, item.replace('#', ''))
+                
+                if item.startswith('#'):
+                    post_text_with_facets.tag(item, item[1:])
+                else:
+                    # Logic for URI metadata
+                    uri = item
+                    if not uri.startswith('http'):
+                        uri = f'https://{uri}'
+                    
+                    # Clean up trailing punctuation that regex might grab
+                    if uri.endswith(('.', ',', '!')):
+                        punctuation = uri[-1]
+                        uri = uri[:-1]
+                        item = item[:-1]
+                        post_text_with_facets.link(item, uri)
+                        post_text_with_facets.text(punctuation)
+                    else:
+                        post_text_with_facets.link(item, uri)
+                
                 last_idx = end
+            
             post_text_with_facets.text(display_text[last_idx:])
 
             # 4. Send the post (FIXED INDENTATION HERE)
