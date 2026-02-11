@@ -201,12 +201,7 @@ def main():
             # 3. Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
             
-            # Regex Breakdown:
-            # 1. (https?://\S+) -> Standard links
-            # 2. (www\.\S+) -> Links starting with www
-            # 3. ([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b) -> Subdomains like anime.fate-go.us
-            # 4. (#\w+) -> Hashtags
-            pattern = re.compile(r'(https?://\S+|www\.\S+|[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b|#\w+)')
+            pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|#\w+)')
             last_idx = 0
             
             for match in pattern.finditer(display_text):
@@ -218,13 +213,12 @@ def main():
                 if item.startswith('#'):
                     post_text_with_facets.tag(item, item[1:])
                 else:
-                    # Logic for URI metadata
                     uri = item
                     if not uri.startswith('http'):
                         uri = f'https://{uri}'
                     
-                    # Clean up trailing punctuation that regex might grab
-                    if uri.endswith(('.', ',', '!')):
+                    # Clean up trailing punctuation (like a period at the end of a sentence)
+                    if uri.endswith(('.', ',', '!', '?')):
                         punctuation = uri[-1]
                         uri = uri[:-1]
                         item = item[:-1]
