@@ -193,57 +193,55 @@ def main():
                     print(f"Warning: Fallback image {chosen_fallback} not found.")
 
             # === 3. Post to Bluesky ===
+            import re
             from atproto import client_utils
             
-            # 1. Safe Truncation (Bluesky uses a 300-BYTE limit)
-            encoded_text = display_text.encode('utf-8')
-            if len(encoded_text) > 300:
+            # 1. Safe Truncation (Keep it under 300 bytes)
+            if len(display_text.encode('utf-8')) > 300:
                 while len(display_text.encode('utf-8')) > 295:
                     display_text = display_text[:-1]
                 display_text += "..."
             
-            # 2. Build the Rich Text
-            # TextBuilder().text() automatically parses facets (links/tags) by default!
-            post_text_with_facets = client_utils.TextBuilder().text(display_text)
+            # 2. Build Rich Text with Facets (Links & Tags)
+            post_text_with_facets = client_utils.TextBuilder()
             
-            # 3. Send the post
-            if len(images_to_upload) == 1:
-                client.send_image(
-                    text=post_text_with_facets,
-                    image=images_to_upload[0],
-                    image_alt="Update",
-                    image_aspect_ratio=aspect_ratios[0]
-                )
-            elif len(images_to_upload) > 1:
-                client.send_images(
-                    text=post_text_with_facets,
-                    images=images_to_upload,
-                    image_alts=[""] * len(images_to_upload),
-                    image_aspect_ratios=aspect_ratios
-                )
-            else:
-                client.send_post(post_text_with_facets)
+            # Regex to find URLs and Hashtags
+            # This pattern finds https://... or #tag while keeping the rest as plain text
+            pattern = re.compile(r'(https?://\S+|#\w+)')
+            last_idx = 0
             
-            # Send the post
-            if len(images_to_upload) == 1:
-                client.send_image(
-                    text=post_text_with_facets,
-                    image=images_to_upload[0],
-                    image_alt="Update",
-                    image_aspect_ratio=aspect_ratios[0]
-                )
-            elif len(images_to_upload) > 1:
-                client.send_images(
-                    text=post_text_with_facets,
-                    images=images_to_upload,
-                    image_alts=[""] * len(images_to_upload),
-                    image_aspect_ratios=aspect_ratios
-                )
-            else:
-                client.send_post(post_text_with_facets)
-
-            print(f"✅ Successfully posted with working links/emojis!")
-            last_posted_text = post_text 
+            for match in pattern.finditer(display_text):
+                # Add any plain text BEFORE the link/tag
+                start, end = match.span()
+                post_text_with_facets.text(display_text[last_idx:start])
+                
+                item = match.group()
+                if item.startswith('http'):
+                    # Add as a clickable Blue Link
+                    post_text_with_facets.link(item, item)
+                elif item.startswith('#'):
+                    # Add as a clickable Blue Tag (remove '#' for the metadata)
+                    post_text_with_facets.tag(item, item.replace('#', ''))
+                
+                last_idx = end
+            
+            # Add any remaining text after the last match
+            post_text_with_facets.text(display_text[last_idx:])
+            
+            # 3. Send the post (same logic as before)
+            try:
+                if len(images_to_upload) >= 1:
+                    client.send_images(
+                        text=post_text_with_facets,
+                        images=images_to_upload,
+                        image_alts=["Update"] * len(images_to_upload),
+                        image_aspect_ratios=aspect_ratios
+                    )
+                else:
+                    client.send_post(post_text_with_facets)
+                print(f"✅ Posted successfully with blue links and emojis!")
+            except Exception as e:
+                print(f"❌ Post failed: {e}")
 
             # Cleanup image files
             for i in range(len(image_urls)):
