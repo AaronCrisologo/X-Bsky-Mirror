@@ -108,10 +108,10 @@ def main():
         print(f"Failed to login to Bluesky: {e}")
         return
 
-    print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
-
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
+        print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
+        
         tweet_data = {
             'text': "This is a simulated post! 🤧 Testing links: https://google.com and #Python hashtags.",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
