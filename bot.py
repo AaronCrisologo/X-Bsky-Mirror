@@ -119,6 +119,7 @@ def main():
             'hasVideo': False
         }
     else:
+        print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Production...")
         tweet_data = get_latest_tweet_data()
     # =================================
 
