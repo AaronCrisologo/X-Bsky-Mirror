@@ -1,36 +1,32 @@
 import os
 
-# 1. Define your specific keyword-to-image mapping
+# 1. Define your specific keyword-to-image/alt mapping
 KEYWORD_MAP = {
-    "pickup summon": "summon_fallback.jpg",
-    "event": "event_fallback.jpg",
-    "learning with manga": "learning.png",
-    "exchange ticket": "ticket_fallback.jpg",
-    "achieved": "achieved.jpg",
-    "debuts": "debut_fallback.jpg",
-    "short animation": "fujimaru.jpg",
-    "ordeal call": "ordeal_fgo.jpg"
+    "pickup summon": {"img": "summon_fallback.jpg", "alt": "Pickup Summon Announcement"},
+    "event": {"img": "event_fallback.jpg", "alt": "New Event Details"},
+    "learning with manga": {"img": "learning.png", "alt": "Learning with Manga Update"},
+    "exchange ticket": {"img": "ticket_fallback.jpg", "alt": "Exchange Ticket Info"},
+    "achieved": {"img": "achieved.jpg", "alt": "Milestone Achieved"},
+    "debuts": {"img": "debut_fallback.jpg", "alt": "Character Debut Announcement"},
+    "short animation": {"img": "fujimaru.jpg", "alt": "Fujimaru Short Animation"},
+    "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"}
 }
 
-# 2. Define the "Safety Net" image (used if no keywords match)
 DEFAULT_FALLBACK = "general_fallback.jpg"
+DEFAULT_ALT = "FGO Update Image"
 
-def get_fallback_image(post_text):
+def get_fallback_data(post_text):
     """
-    Returns a specific image path based on keywords, 
-    otherwise returns the default fallback.
+    Returns a tuple of (image_path, alt_text) based on keywords.
     """
     if not post_text:
-        return DEFAULT_FALLBACK
+        return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
     
-    # Loop through keywords to find a match
-    for keyword, filename in KEYWORD_MAP.items():
+    for keyword, data in KEYWORD_MAP.items():
         if keyword in text_lower:
-            # Only return if the file actually exists on your computer
-            if os.path.exists(filename):
-                return filename
+            if os.path.exists(data["img"]):
+                return data["img"], data["alt"]
     
-    # 3. If the loop finishes with no match, return the default
-    return DEFAULT_FALLBACK
+    return DEFAULT_FALLBACK, DEFAULT_ALT
