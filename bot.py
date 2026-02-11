@@ -221,26 +221,25 @@ More info ➡️ fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0203_
                 if item.startswith('#'):
                     post_text_with_facets.tag(item, item[1:])
                 else:
-                    # 1. Prepare the Destination URI (the "real" link)
-                    # Use the original post_text to find the full link if it was truncated
-                    # But for now, let's just clean the current item
+                    # 1. Prepare the Destination URI (The actual working link)
                     uri = item
-                    
-                    # Strip ellipses from the URI so it doesn't 404
+                    # Strip any truncation dots from the actual URL
                     uri = uri.replace('...', '').replace('…', '')
                     
                     if not uri.startswith('http'):
                         uri = f'https://{uri}'
 
-                    # 2. Prepare the Display Text (the "pretty" link)
-                    # If it's a long FGO link, we can trim it visually
+                    # 2. Prepare the Display Item (What users see)
                     display_item = item
-                    
-                    # Clean up trailing punctuation from URI only
+                    # If the link is too long, shorten it visually
+                    if len(display_item) > 30:
+                        display_item = display_item[:27] + "..."
+
+                    # 3. Clean up trailing punctuation from the URI
                     if uri.endswith(('.', ',', '!', '?')):
                         punctuation = uri[-1]
                         uri = uri[:-1]
-                        # If the display item also had it, keep it for the text part
+                        # If our shortened display item ends with that punctuation, strip it
                         if display_item.endswith(punctuation):
                             display_item = display_item[:-1]
                         
