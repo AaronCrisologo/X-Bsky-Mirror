@@ -195,23 +195,34 @@ def main():
             # === 3. Post to Bluesky ===
             from atproto import client_utils
             
-            # Ensure we don't slice in the middle of a complex emoji
-            # Use byte-length for Bluesky's 300-byte limit
-            if len(display_text.encode('utf-8')) > 300:
-                display_text = display_text[:290] + "..."
-
-            # Create the builder
-            post_text_with_facets = client_utils.TextBuilder()
+            # 1. Safe Truncation (Bluesky uses a 300-BYTE limit)
+            encoded_text = display_text.encode('utf-8')
+            if len(encoded_text) > 300:
+                while len(display_text.encode('utf-8')) > 295:
+                    display_text = display_text[:-1]
+                display_text += "..."
             
-            # parse_text finds #tags and https:// links and creates the blue "facets"
-            # It handles emojis natively so they don't break.
-            for segment in client_utils.parse_text(display_text):
-                if segment.type == 'link':
-                    post_text_with_facets.link(segment.text, segment.link)
-                elif segment.type == 'tag':
-                    post_text_with_facets.tag(segment.text, segment.tag)
-                else:
-                    post_text_with_facets.text(segment.text)
+            # 2. Build the Rich Text
+            # TextBuilder().text() automatically parses facets (links/tags) by default!
+            post_text_with_facets = client_utils.TextBuilder().text(display_text)
+            
+            # 3. Send the post
+            if len(images_to_upload) == 1:
+                client.send_image(
+                    text=post_text_with_facets,
+                    image=images_to_upload[0],
+                    image_alt="Update",
+                    image_aspect_ratio=aspect_ratios[0]
+                )
+            elif len(images_to_upload) > 1:
+                client.send_images(
+                    text=post_text_with_facets,
+                    images=images_to_upload,
+                    image_alts=[""] * len(images_to_upload),
+                    image_aspect_ratios=aspect_ratios
+                )
+            else:
+                client.send_post(post_text_with_facets)
             
             # Send the post
             if len(images_to_upload) == 1:
