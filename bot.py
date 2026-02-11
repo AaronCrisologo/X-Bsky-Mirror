@@ -98,6 +98,9 @@ SIMULATION_MODE = True  # Set to False to use the real scraper
 
 def main():
     client = Client()
+
+    last_posted_text = ""
+    
     try:
         client.login(BSKY_HANDLE, BSKY_PASSWORD)
     except Exception as e:
