@@ -113,7 +113,7 @@ def main():
     # === HARDCODED DATA SIMULATION ===
     if SIMULATION_MODE:
         tweet_data = {
-            'text': "Lorem #ipsum www.google.com 🌙 anime.fate-go.us  youtu.be/loMGysqsx48",
+            'text': "Lorem #ipsum www.google.com 🌙 anime.fate-go.us youtu.be/loMGysqsx48",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
             'hasVideo': False
