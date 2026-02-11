@@ -1,4 +1,4 @@
-from fallbacks import get_fallback_image
+from fallbacks import get_fallback_data
 
 import time
 import datetime
@@ -167,13 +167,12 @@ def main():
             
             images_to_upload = []
             aspect_ratios = []
-            final_alt_text = "Update" # Default placeholder
+            final_alt_text = "Update" 
 
             # 1. Handle Images/Fallback
             if (has_video or not image_urls):
-                # Using the new tuple return from fallbacks.py
                 chosen_fallback, fallback_alt = get_fallback_data(post_text)
-                final_alt_text = fallback_alt # Use specific keyword alt
+                final_alt_text = fallback_alt 
                 
                 if os.path.exists(chosen_fallback):
                     with Image.open(chosen_fallback) as img:
@@ -182,7 +181,6 @@ def main():
                     with open(chosen_fallback, 'rb') as f:
                         images_to_upload = [f.read()]
             else:
-                # Process scraped images
                 for i in range(len(image_urls)):
                     filename = f"tweet_img_{i}.jpg"
                     if os.path.exists(filename):
@@ -194,23 +192,16 @@ def main():
 
             # 2. Logic for Truncation and Alt Text
             display_text = post_text
-            is_truncated = False
-
             if len(display_text.encode('utf-8')) > 300:
-                is_truncated = True
                 while len(display_text.encode('utf-8')) > 295:
                     display_text = display_text[:-1]
                 display_text += "..."
-                
-                # If truncated, the Alt Text becomes the FULL original post text
-                final_alt_text = post_text
+                final_alt_text = post_text # Full text goes to Alt
 
             # 3. Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
             pattern = re.compile(r'(https?://\S+|#\w+)')
             last_idx = 0
-            
-            # Using display_text (the potentially truncated version) for the post body
             for match in pattern.finditer(display_text):
                 start, end = match.span()
                 post_text_with_facets.text(display_text[last_idx:start])
@@ -220,24 +211,24 @@ def main():
                 elif item.startswith('#'):
                     post_text_with_facets.tag(item, item.replace('#', ''))
                 last_idx = end
-            
             post_text_with_facets.text(display_text[last_idx:])
 
-            # 4. Send the post
-            if len(images_to_upload) >= 1:
-                client.send_images(
-                    text=post_text_with_facets,
-                    images=images_to_upload,
-                    # If truncated, use the full post text; otherwise use the keyword-based alt
-                    image_alts=[final_alt_text] * len(images_to_upload),
-                    image_aspect_ratios=aspect_ratios
-                )
-            else:
-                client.send_post(post_text_with_facets)
+            # 4. Send the post (FIXED INDENTATION HERE)
+            try:
+                if len(images_to_upload) >= 1:
+                    client.send_images(
+                        text=post_text_with_facets,
+                        images=images_to_upload,
+                        image_alts=[final_alt_text] * len(images_to_upload),
+                        image_aspect_ratios=aspect_ratios
+                    )
+                else:
+                    client.send_post(post_text_with_facets)
+                
+                print(f"✅ Posted successfully!")
 
-                print(f"✅ Posted successfully with blue links and emojis!")
             except Exception as e:
-                print(f"❌ Post failed: {e}")
+                print(f"❌ Post failed at API level: {e}")
 
             # Cleanup image files
             for i in range(len(image_urls)):
@@ -246,8 +237,7 @@ def main():
                     os.remove(img_file)
 
         except Exception as e:
-            print(f"❌ Bluesky post failed: {e}")
-
+            print(f"❌ Bluesky processing failed: {e}")
     else:
         print("No new content to post.")
 
