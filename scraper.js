@@ -100,7 +100,7 @@ async function getLatestTweet(username) {
             }
         }
 
-        process.stdout.write(Buffer.from(JSON.stringify(tweetData) + '\n', 'utf8'));
+        console.log(JSON.stringify(tweetData));
 
     } catch (error) {
         console.error(`{"error": "${error.message}"}`);
