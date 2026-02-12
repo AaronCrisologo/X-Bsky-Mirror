@@ -34,12 +34,11 @@ def get_latest_tweet_data():
             capture_output=True,
             text=True,
             encoding='utf-8',
-            # REMOVE errors='replace' to see if it throws a specific error 
-            # OR use 'strict' to debug.
+            errors='replace',  # This prevents crashes on encoding issues
             env=my_env, 
             timeout=FETCH_TIMEOUT
         )
-
+        
         if result.stderr:
             print(f"Scraper stderr: {result.stderr}")
 
