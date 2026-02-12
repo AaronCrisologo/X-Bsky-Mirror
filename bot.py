@@ -27,18 +27,18 @@ def get_latest_tweet_data():
         # Force the environment to recognize UTF-8
         my_env = os.environ.copy()
         my_env["PYTHONIOENCODING"] = "utf-8"
+        my_env["PYTHONUTF8"] = "1"
 
         result = subprocess.run(
             ['node', 'scraper.js'],
             capture_output=True,
             text=True,
             encoding='utf-8',
-            # REMOVE errors='replace' to see if it throws a specific error 
-            # OR use 'strict' to debug.
+            errors='replace',  # This prevents crashes on encoding issues
             env=my_env, 
             timeout=FETCH_TIMEOUT
         )
-
+        
         if result.stderr:
             print(f"Scraper stderr: {result.stderr}")
 

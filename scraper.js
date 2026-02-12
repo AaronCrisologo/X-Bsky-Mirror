@@ -1,4 +1,5 @@
 process.stdout.setEncoding('utf8');
+process.stderr.setEncoding('utf8');
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -72,19 +73,6 @@ async function getLatestTweet(username) {
         });
 
         // If it's a video or has no images, we won't try to download anything
-        // The Python script will handle the fallback logic.
-        if (tweetData && tweetData.images.length > 0) {
-            for (let i = 0; i < tweetData.images.length; i++) {
-                const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
-                try {
-                    const viewSource = await page.goto(highResUrl);
-                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
-                } catch (e) {
-                    process.stderr.write(`Failed image ${i}: ${e.message}\n`);
-                }
-            }
-        }
-
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
