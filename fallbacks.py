@@ -10,6 +10,10 @@ SERVANTS_MAP = {
     "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana"}
     "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne"}
     "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote"}
+    "dioscuri": {"img": "Dioscuri.jpg", "alt": "Dioscuri"},
+    "altera": {"img": "Altera.jpg", "alt": "Altera"},
+    "bradamante": {"img": "Bradamante.jpg", "alt": "Bradamante"},
+    "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia"},
 }
 
 KEYWORD_MAP = {
