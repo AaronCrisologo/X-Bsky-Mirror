@@ -1,7 +1,23 @@
 import os
 
+IMAGE_DIR = "assets/images/"
+
 # 1. Define your specific keyword-to-image/alt mapping
+SERVANTS_MAP = {
+    "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber)"},
+    "durga": {"img": "Durga.jpg", "alt": "Durga"},
+    "bhima": {"img": "Bhima.jpg", "alt": "Bhima"},
+    "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana"}
+    "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne"}
+    "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote"}
+    "dioscuri": {"img": "Dioscuri.jpg", "alt": "Dioscuri"},
+    "altera": {"img": "Altera.jpg", "alt": "Altera"},
+    "bradamante": {"img": "Bradamante.jpg", "alt": "Bradamante"},
+    "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia"},
+}
+
 KEYWORD_MAP = {
+    **SERVANTS_MAP,
     "pickup summon": {"img": "summon_fallback.jpg", "alt": "Pickup Summon Announcement"},
     "event": {"img": "event_fallback.jpg", "alt": "New Event Details"},
     "learning with manga": {"img": "learning.png", "alt": "Learning with Manga Update"},
@@ -26,7 +42,8 @@ def get_fallback_data(post_text):
     
     for keyword, data in KEYWORD_MAP.items():
         if keyword in text_lower:
-            if os.path.exists(data["img"]):
-                return data["img"], data["alt"]
+            full_path = os.path.join(IMAGE_DIR, data["img"])
+            if os.path.exists(full_path):
+                return full_path, data["alt"]
     
     return DEFAULT_FALLBACK, DEFAULT_ALT
