@@ -1,4 +1,5 @@
 process.stdout.setEncoding('utf8');
+process.stderr.setEncoding('utf8');
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
