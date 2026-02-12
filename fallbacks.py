@@ -7,9 +7,9 @@ SERVANTS_MAP = {
     "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber)"},
     "durga": {"img": "Durga.jpg", "alt": "Durga"},
     "bhima": {"img": "Bhima.jpg", "alt": "Bhima"},
-    "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana"}
-    "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne"}
-    "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote"}
+    "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana"},
+    "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne"},
+    "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote"},
     "dioscuri": {"img": "Dioscuri.jpg", "alt": "Dioscuri"},
     "altera": {"img": "Altera.jpg", "alt": "Altera"},
     "bradamante": {"img": "Bradamante.jpg", "alt": "Bradamante"},
@@ -28,7 +28,7 @@ KEYWORD_MAP = {
     "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"}
 }
 
-DEFAULT_FALLBACK = "general_fallback.jpg"
+DEFAULT_FALLBACK = os.path.join(IMAGE_DIR, "general_fallback.jpg")
 DEFAULT_ALT = "FGO Update Image"
 
 def get_fallback_data(post_text):
