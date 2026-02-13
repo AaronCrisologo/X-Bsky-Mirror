@@ -96,4 +96,4 @@ async function getLatestTweet(username) {
     }
 }
 
-getLatestTweet('FateGO_USA');
+getLatestTweet('Atlus_West');
