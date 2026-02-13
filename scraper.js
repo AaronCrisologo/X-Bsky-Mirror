@@ -52,8 +52,37 @@ async function getLatestTweet(username) {
                     const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
         
                     if (timeEl) {
+                        let tweetText = "";
+                        
+                        // Extract text WITH emojis properly
+                        if (textEl) {
+                            // Process all child nodes to capture text and emoji images
+                            textEl.childNodes.forEach(node => {
+                                if (node.nodeType === Node.TEXT_NODE) {
+                                    tweetText += node.textContent;
+                                } else if (node.nodeName === 'IMG') {
+                                    // Emoji images have alt text with the actual emoji
+                                    tweetText += node.alt || '';
+                                } else if (node.childNodes) {
+                                    // Recursively process nested nodes
+                                    const processNode = (n) => {
+                                        n.childNodes.forEach(child => {
+                                            if (child.nodeType === Node.TEXT_NODE) {
+                                                tweetText += child.textContent;
+                                            } else if (child.nodeName === 'IMG') {
+                                                tweetText += child.alt || '';
+                                            } else if (child.childNodes) {
+                                                processNode(child);
+                                            }
+                                        });
+                                    };
+                                    processNode(node);
+                                }
+                            });
+                        }
+                        
                         results.push({
-                            text: textEl ? textEl.innerText : "",  // Changed from textContent to innerText
+                            text: tweetText,
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
                             hasVideo: hasVideo,
