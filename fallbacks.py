@@ -13,6 +13,17 @@ SERVANTS_MAP = {
     "dioscuri": {"img": "Dioscuri.jpg", "alt": "Dioscuri"},
     "altera": {"img": "Altera.jpg", "alt": "Altera"},
     "bradamante": {"img": "Bradamante.jpg", "alt": "Bradamante"},
+    "jack the ripper": {"img": "Jack the Ripper.jpg", "alt": "Jack the Ripper"},
+    "mordred": {"img": "Mordred.jpg", "alt": "Mordred"},
+    "nitocris (Alter)": {"img": "Nitocris (Alter).jpg", "alt": "Nitocris (Alter)"},
+    "kashin koji": {"img": "Kashin Koji.jpg", "alt": "Kashin Koji"},
+    "galatea": {"img": "Galatea.jpg", "alt": "Galatea"},
+    "jeanne d'Arc": {"img": "Jeanne d'Arc.jpg", "alt": "Jeanne d'Arc"},
+    "osakabehime": {"img": "Osakabehime.jpg", "alt": "Osakabehime"},
+    "ganesha (jinako)": {"img": "Ganesha (Jinako).jpg", "alt": "Ganesha (Jinako)"},
+    "nightingale": {"img": "Nightingale.jpg", "alt": "Nightingale"},
+    "altria pendragon": {"img": "Altria Pendragon.jpg", "alt": "Altria Pendragon"},
+    "vritra": {"img": "Vritra.jpg", "alt": "Vritra"},
     "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia"},
 }
 
