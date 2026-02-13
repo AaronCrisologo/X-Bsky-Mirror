@@ -95,7 +95,7 @@ def is_already_posted(client, new_text):
 
 
 # === CONFIGURATION ===
-SIMULATION_MODE = False  # Set to False to use the real scraper
+SIMULATION_MODE = True  # Set to False to use the real scraper
 
 def main():
     client = Client()
