@@ -50,13 +50,42 @@ async function getLatestTweet(username) {
                     
                     // Detect if there's a video or GIF
                     const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
-
+        
                     if (timeEl) {
+                        let tweetText = "";
+                        
+                        // Extract text WITH emojis properly
+                        if (textEl) {
+                            // Process all child nodes to capture text and emoji images
+                            textEl.childNodes.forEach(node => {
+                                if (node.nodeType === Node.TEXT_NODE) {
+                                    tweetText += node.textContent;
+                                } else if (node.nodeName === 'IMG') {
+                                    // Emoji images have alt text with the actual emoji
+                                    tweetText += node.alt || '';
+                                } else if (node.childNodes) {
+                                    // Recursively process nested nodes
+                                    const processNode = (n) => {
+                                        n.childNodes.forEach(child => {
+                                            if (child.nodeType === Node.TEXT_NODE) {
+                                                tweetText += child.textContent;
+                                            } else if (child.nodeName === 'IMG') {
+                                                tweetText += child.alt || '';
+                                            } else if (child.childNodes) {
+                                                processNode(child);
+                                            }
+                                        });
+                                    };
+                                    processNode(node);
+                                }
+                            });
+                        }
+                        
                         results.push({
-                            text: textEl ? textEl.textContent : "",
+                            text: tweetText,
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
-                            hasVideo: hasVideo, // Added flag
+                            hasVideo: hasVideo,
                             images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
                         });
                     }

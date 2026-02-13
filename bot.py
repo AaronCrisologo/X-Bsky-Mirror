@@ -32,25 +32,22 @@ def get_latest_tweet_data():
         result = subprocess.run(
             ['node', 'scraper.js'],
             capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',  # This prevents crashes on encoding issues
+            text=False,  # Changed to False - we'll decode manually
             env=my_env, 
             timeout=FETCH_TIMEOUT
         )
         
         if result.stderr:
-            print(f"Scraper stderr: {result.stderr}")
+            stderr_text = result.stderr.decode('utf-8', errors='ignore')
+            print(f"Scraper stderr: {stderr_text}")
 
-        # The 'NoneType' error happened because the crash prevented 'result'
-        # from having a valid stdout.
         if not result.stdout:
             return None
 
-        json_output = result.stdout.strip()
+        # Decode stdout with UTF-8 explicitly
+        json_output = result.stdout.decode('utf-8', errors='strict').strip()
 
         # Guard against non-JSON output appearing before the JSON string
-        # (like deprecation warnings or logs)
         if "{" not in json_output:
             return None
 
@@ -63,6 +60,9 @@ def get_latest_tweet_data():
 
     except subprocess.TimeoutExpired:
         print("Scraper timed out.")
+        return None
+    except UnicodeDecodeError as e:
+        print(f"Encoding error: {e}")
         return None
     except Exception as e:
         print(f"Error running scraper: {e}")
