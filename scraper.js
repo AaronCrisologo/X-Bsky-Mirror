@@ -1,153 +1,99 @@
+process.stdout.setEncoding('utf8');
+process.stderr.setEncoding('utf8');
+
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const https = require('https');
-const path = require('path');
 
 puppeteer.use(StealthPlugin());
-
-// Ensure strictly UTF-8 output
-if (process.stdout.isTTY) {
-    process.stdout.setEncoding('utf8');
-}
 
 const rawCookies = [
     { "domain": ".x.com", "name": "auth_token", "value": process.env.X_AUTH_TOKEN, "path": "/", "secure": true, "sameSite": "Lax" },
     { "domain": ".x.com", "name": "ct0", "value": process.env.X_CT0, "path": "/", "secure": true, "sameSite": "Lax" }
 ];
 
-// Better download function that mimics a browser request
-function downloadImage(url, filepath, userAgent) {
-    return new Promise((resolve, reject) => {
-        const fileStream = fs.createWriteStream(filepath);
-        
-        const options = {
-            headers: {
-                'User-Agent': userAgent,
-                'Referer': 'https://x.com/',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-            }
-        };
-
-        https.get(url, options, (response) => {
-            if (response.statusCode !== 200) {
-                reject(new Error(`Failed to download: ${response.statusCode}`));
-                return;
-            }
-            response.pipe(fileStream);
-            fileStream.on('finish', () => {
-                fileStream.close();
-                resolve();
-            });
-            fileStream.on('error', (err) => {
-                fs.unlink(filepath, () => {}); // Delete failed file
-                reject(err);
-            });
-        }).on('error', (err) => {
-            fs.unlink(filepath, () => {});
-            reject(err);
-        });
-    });
-}
-
 async function getLatestTweet(username) {
-    const log = (msg) => process.stderr.write(`[Node Log] ${msg}\n`);
-    log(`Starting scraper for ${username}...`);
-    
-    let browser;
+    // Change this line in scraper.js:
+    const browser = await puppeteer.launch({
+        headless: "new",
+        // executablePath is often unnecessary if you let npm install it normally
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--single-process' // Helps with memory management in CI
+        ]
+    });
+
+    const page = await browser.newPage();
     try {
-        browser = await puppeteer.launch({
-            headless: "new",
-            args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu'
-            ]
-        });
-
-        const page = await browser.newPage();
-        
-        // Define UA once to use for both navigation and downloads
-        const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-        await page.setUserAgent(USER_AGENT);
-        await page.setViewport({ width: 1280, height: 1000 });
         await page.setCookie(...rawCookies);
+        await page.setViewport({ width: 1280, height: 1000 });
 
-        log(`Navigating to https://x.com/${username}...`);
-        await page.goto(`https://x.com/${username}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // Go to the "Replies" tab or just the profile.
+        // Adding /with_replies often forces X to bypass some cached layout issues.
+        await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
 
-        log('Waiting for articles...');
-        await page.waitForSelector('article', { timeout: 45000 });
+        // Wait for the feed to load
+        await page.waitForSelector('article', { timeout: 30000 });
 
-        // Wait a bit for dynamic content/emojis to render
-        await new Promise(r => setTimeout(r, 3000));
+        // --- NEW SCROLL & COLLECT LOGIC ---
+        const tweetData = await page.evaluate(async () => {
+            const results = [];
+            for (let i = 0; i < 3; i++) {
+                const articles = Array.from(document.querySelectorAll('article'));
+                articles.forEach(article => {
+                    const timeEl = article.querySelector('time');
+                    const textEl = article.querySelector('[data-testid="tweetText"]');
+                    const pinCheck = article.innerText.includes('Pinned');
+                    
+                    // Detect if there's a video or GIF
+                    const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
 
-        const tweetData = await page.evaluate(() => {
-            const articles = Array.from(document.querySelectorAll('article'));
-            // Get the first valid tweet (skipping pinned if necessary, logic simplified here)
-            const article = articles[0]; 
+                    if (timeEl) {
+                        results.push({
+                            text: textEl ? textEl.textContent : "",
+                            time: timeEl.getAttribute('datetime'),
+                            isPinned: pinCheck,
+                            hasVideo: hasVideo, // Added flag
+                            images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
+                        });
+                    }
+                });
+                window.scrollBy(0, 800);
+                await new Promise(r => setTimeout(r, 1500));
+            }
             
-            if (!article) return null;
-
-            const timeEl = article.querySelector('time');
-            const textEl = article.querySelector('[data-testid="tweetText"]');
-            const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
-            
-            // Get high-res images
-            const images = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img'))
-                .map(img => img.src);
-
-            return {
-                text: textEl ? textEl.innerText : "",
-                time: timeEl ? timeEl.getAttribute('datetime') : "post",
-                hasVideo: hasVideo,
-                images: images
-            };
+            const cleanList = results.filter((v, i, a) =>
+                a.findIndex(t => t.time === v.time) === i && !v.isPinned
+            );
+            cleanList.sort((a, b) => new Date(b.time) - new Date(a.time));
+            return cleanList[0];
         });
 
-        if (!tweetData) {
-            throw new Error("No tweet data found.");
-        }
-
-        log(`Found tweet from: ${tweetData.time}`);
-        log(`Text length: ${tweetData.text.length}`);
-        
-        // --- IMAGE DOWNLOAD SECTION ---
-        if (tweetData.images.length > 0 && !tweetData.hasVideo) {
-            log(`Found ${tweetData.images.length} images. Downloading...`);
-            
+        // If it's a video or has no images, we won't try to download anything
+        // --- HIGH-RES IMAGE DOWNLOAD ---
+        if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
-                const imgUrl = tweetData.images[i].split('?')[0] + '?name=large'; // Use large format
-                const filename = path.resolve(__dirname, `tweet_img_${i}.jpg`);
-                
+                // Force original quality
+                const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
                 try {
-                    await downloadImage(imgUrl, filename, USER_AGENT);
-                    const stats = fs.statSync(filename);
-                    log(`✓ Saved ${filename} (${stats.size} bytes)`);
+                    const viewSource = await page.goto(highResUrl);
+                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
                 } catch (e) {
-                    log(`✗ Failed to download image ${i}: ${e.message}`);
-                    // Remove from array so Python doesn't look for it
-                    tweetData.images.splice(i, 1);
-                    i--;
+                    process.stderr.write(`Failed image ${i}: ${e.message}\n`);
                 }
             }
         }
 
-        // --- EMOJI SAFETY & OUTPUT ---
-        // 1. Write to a file as a backup (safest for emojis)
-        fs.writeFileSync('latest_tweet.json', JSON.stringify(tweetData, null, 2), 'utf8');
-        log('Saved data to latest_tweet.json');
-
-        // 2. Write to stdout for pipe (using process.stdout.write to avoid extra newline issues)
         console.log(JSON.stringify(tweetData));
 
     } catch (error) {
-        log(`❌ ERROR: ${error.message}`);
-        console.log(JSON.stringify({ error: error.message }));
+        console.error(`{"error": "${error.message}"}`);
     } finally {
-        if (browser) await browser.close();
+        await browser.close();
     }
 }
 
-getLatestTweet(process.env.BSKY_USER || 'Atlus_West'); // Default for testing
+getLatestTweet('FateGO_USA');
