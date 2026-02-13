@@ -108,8 +108,18 @@ async function getLatestTweet(username) {
                 // Force original quality
                 const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
                 try {
-                    const viewSource = await page.goto(highResUrl);
-                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
+                    const response = await page.goto(highResUrl, { 
+                        waitUntil: 'networkidle0',
+                        timeout: 15000 
+                    });
+                    
+                    // Check if response is valid and has a buffer
+                    if (response && response.ok()) {
+                        const buffer = await response.buffer();
+                        fs.writeFileSync(`tweet_img_${i}.jpg`, buffer);
+                    } else {
+                        process.stderr.write(`Failed image ${i}: Invalid response (status: ${response?.status()})\n`);
+                    }
                 } catch (e) {
                     process.stderr.write(`Failed image ${i}: ${e.message}\n`);
                 }
