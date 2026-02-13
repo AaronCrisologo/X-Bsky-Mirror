@@ -135,4 +135,4 @@ async function getLatestTweet(username) {
     }
 }
 
-getLatestTweet('Atlus_West');
+getLatestTweet('13sar_atlus');
