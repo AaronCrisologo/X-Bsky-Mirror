@@ -50,13 +50,13 @@ async function getLatestTweet(username) {
                     
                     // Detect if there's a video or GIF
                     const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
-
+        
                     if (timeEl) {
                         results.push({
-                            text: textEl ? textEl.textContent : "",
+                            text: textEl ? textEl.innerText : "",  // Changed from textContent to innerText
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
-                            hasVideo: hasVideo, // Added flag
+                            hasVideo: hasVideo,
                             images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
                         });
                     }
