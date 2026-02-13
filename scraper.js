@@ -73,19 +73,29 @@ async function getLatestTweet(username) {
         });
 
         // If it's a video or has no images, we won't try to download anything
-        // --- HIGH-RES IMAGE DOWNLOAD ---
+        // --- HIGH-RES IMAGE DOWNLOAD (STABLE VERSION) ---
         if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
                 // Force original quality
                 const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
                 try {
-                    const viewSource = await page.goto(highResUrl);
-                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
+                    const response = await page.goto(highResUrl, { 
+                        waitUntil: 'networkidle0', 
+                        timeout: 15000 
+                    });
+        
+                    if (response && response.ok()) {
+                        fs.writeFileSync(`tweet_img_${i}.jpg`, await response.buffer());
+                    } else {
+                        process.stderr.write(`Failed image ${i}: Received status ${response ? response.status() : 'null'}\n`);
+                    }
                 } catch (e) {
                     process.stderr.write(`Failed image ${i}: ${e.message}\n`);
                 }
             }
         }
+        // Return to the profile or a blank page so the script finishes cleanly
+        await page.goto('about:blank');
 
         console.log(JSON.stringify(tweetData));
 
