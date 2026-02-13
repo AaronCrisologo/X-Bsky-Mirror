@@ -4,7 +4,6 @@ process.stderr.setEncoding('utf8');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const axios = require('axios');
 
 puppeteer.use(StealthPlugin());
 
@@ -106,13 +105,11 @@ async function getLatestTweet(username) {
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
+                // Force original quality
                 const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
                 try {
-                    const response = await axios.get(highResUrl, { 
-                        responseType: 'arraybuffer',
-                        timeout: 15000 
-                    });
-                    fs.writeFileSync(`tweet_img_${i}.jpg`, Buffer.from(response.data));
+                    const viewSource = await page.goto(highResUrl);
+                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
                 } catch (e) {
                     process.stderr.write(`Failed image ${i}: ${e.message}\n`);
                 }
