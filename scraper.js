@@ -57,7 +57,9 @@ function downloadImage(url, filepath, timeout = 15000) {
 
 async function getLatestTweet(username) {
     const startTime = Date.now();
-    process.stderr.write(`Starting scraper at ${new Date().toISOString()}\n`);
+    process.stderr.write(`\n${'='.repeat(60)}\n`);
+    process.stderr.write(`🚀 SCRAPER START: ${new Date().toISOString()}\n`);
+    process.stderr.write(`${'='.repeat(60)}\n\n`);
     
     let browser;
     let attempt = 0;
@@ -65,10 +67,12 @@ async function getLatestTweet(username) {
 
     while (attempt < maxAttempts) {
         attempt++;
-        process.stderr.write(`\n=== Attempt ${attempt}/${maxAttempts} ===\n`);
+        process.stderr.write(`\n${'─'.repeat(60)}\n`);
+        process.stderr.write(`📍 ATTEMPT ${attempt}/${maxAttempts}\n`);
+        process.stderr.write(`${'─'.repeat(60)}\n`);
         
         try {
-            process.stderr.write('Launching browser...\n');
+            process.stderr.write('🌐 Launching browser...\n');
             browser = await puppeteer.launch({
                 headless: "new",
                 args: [
@@ -88,7 +92,7 @@ async function getLatestTweet(username) {
                     '--disable-blink-features=AutomationControlled'
                 ]
             });
-            process.stderr.write(`Browser launched in ${Date.now() - startTime}ms\n`);
+            process.stderr.write(`✅ Browser launched in ${Date.now() - startTime}ms\n`);
 
             const page = await browser.newPage();
             
@@ -103,7 +107,7 @@ async function getLatestTweet(username) {
             page.setDefaultTimeout(60000);
             page.setDefaultNavigationTimeout(60000);
             
-            process.stderr.write('Setting cookies...\n');
+            process.stderr.write('🍪 Setting cookies...\n');
             await page.setCookie(...rawCookies);
             await page.setViewport({ width: 1280, height: 1000 });
 
@@ -114,7 +118,7 @@ async function getLatestTweet(username) {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
             });
 
-            process.stderr.write(`Navigating to https://x.com/${username}...\n`);
+            process.stderr.write(`🔗 Navigating to https://x.com/${username}...\n`);
             
             // Try to navigate with retries
             try {
@@ -122,24 +126,26 @@ async function getLatestTweet(username) {
                     waitUntil: 'domcontentloaded',
                     timeout: 45000 
                 });
+                process.stderr.write('✅ Navigation successful\n');
             } catch (navError) {
-                process.stderr.write(`Navigation error: ${navError.message}\n`);
+                process.stderr.write(`❌ Navigation error: ${navError.message}\n`);
                 if (attempt < maxAttempts) {
                     await browser.close();
-                    process.stderr.write('Retrying...\n');
-                    await new Promise(r => setTimeout(r, 2000)); // Wait before retry
+                    process.stderr.write('🔄 Retrying in 2 seconds...\n');
+                    await new Promise(r => setTimeout(r, 2000));
                     continue;
                 }
                 throw navError;
             }
 
-            process.stderr.write('Waiting for articles...\n');
+            process.stderr.write('⏳ Waiting for articles...\n');
             await page.waitForSelector('article', { timeout: 45000 });
-            process.stderr.write('Articles found!\n');
+            process.stderr.write('✅ Articles found!\n');
 
             // Give the page a moment to fully render
             await new Promise(r => setTimeout(r, 2000));
 
+            process.stderr.write('🔍 Extracting tweet data...\n');
             const tweetData = await page.evaluate(async () => {
                 const results = [];
                 
@@ -151,13 +157,18 @@ async function getLatestTweet(username) {
                         const pinCheck = article.innerText.includes('Pinned');
                         const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
 
+                        // Get images
+                        const imageElements = article.querySelectorAll('[data-testid="tweetPhoto"] img');
+                        const images = Array.from(imageElements).map(img => img.src);
+
                         if (timeEl) {
                             results.push({
                                 text: textEl ? textEl.innerText : "",
                                 time: timeEl.getAttribute('datetime'),
                                 isPinned: pinCheck,
                                 hasVideo: hasVideo,
-                                images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
+                                images: images,
+                                imageCount: images.length
                             });
                         }
                     });
@@ -172,56 +183,122 @@ async function getLatestTweet(username) {
                 return cleanList[0];
             });
 
-            process.stderr.write(`Tweet data extracted: ${tweetData ? 'SUCCESS' : 'FAILED'}\n`);
-
-            if (tweetData && tweetData.text) {
-                // EMOJI LOGGING
-                const emojiCount = countEmojis(tweetData.text);
-                const hasEmojiFlag = hasEmojis(tweetData.text);
-                process.stderr.write(`\n📊 EMOJI ANALYSIS:\n`);
-                process.stderr.write(`  - Text length: ${tweetData.text.length} chars\n`);
-                process.stderr.write(`  - Contains emojis: ${hasEmojiFlag ? 'YES ✓' : 'NO ✗'}\n`);
-                process.stderr.write(`  - Emoji count: ${emojiCount}\n`);
-                process.stderr.write(`  - First 100 chars: ${tweetData.text.substring(0, 100)}\n`);
+            process.stderr.write(`\n${'─'.repeat(60)}\n`);
+            process.stderr.write(`📊 TWEET DATA EXTRACTION RESULTS\n`);
+            process.stderr.write(`${'─'.repeat(60)}\n`);
+            
+            if (tweetData) {
+                process.stderr.write(`✅ Status: SUCCESS\n`);
+                process.stderr.write(`📅 Time: ${tweetData.time}\n`);
+                process.stderr.write(`📹 Has Video: ${tweetData.hasVideo ? 'YES' : 'NO'}\n`);
+                process.stderr.write(`🖼️  Image Count: ${tweetData.imageCount || 0}\n`);
                 
-                // Show byte representation of first few chars to debug encoding
-                const bytes = Buffer.from(tweetData.text.substring(0, 20), 'utf8');
-                process.stderr.write(`  - First bytes (hex): ${bytes.toString('hex').substring(0, 60)}\n\n`);
+                if (tweetData.images && tweetData.images.length > 0) {
+                    process.stderr.write(`\n📸 IMAGE URLs FOUND:\n`);
+                    tweetData.images.forEach((url, idx) => {
+                        process.stderr.write(`  [${idx}] ${url.substring(0, 80)}...\n`);
+                    });
+                }
+                
+                // EMOJI LOGGING
+                if (tweetData.text) {
+                    const emojiCount = countEmojis(tweetData.text);
+                    const hasEmojiFlag = hasEmojis(tweetData.text);
+                    
+                    process.stderr.write(`\n${'─'.repeat(60)}\n`);
+                    process.stderr.write(`😀 EMOJI ANALYSIS\n`);
+                    process.stderr.write(`${'─'.repeat(60)}\n`);
+                    process.stderr.write(`📏 Text length: ${tweetData.text.length} characters\n`);
+                    process.stderr.write(`😊 Contains emojis: ${hasEmojiFlag ? 'YES ✓' : 'NO ✗'}\n`);
+                    process.stderr.write(`🔢 Emoji count: ${emojiCount}\n`);
+                    
+                    // Show character codes for debugging
+                    const first50 = tweetData.text.substring(0, 50);
+                    process.stderr.write(`\n📝 First 50 chars:\n"${first50}"\n`);
+                    
+                    // Show Unicode code points
+                    const codePoints = [];
+                    for (let char of first50) {
+                        codePoints.push(`U+${char.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+                    }
+                    process.stderr.write(`\n🔤 Unicode code points (first 20):\n${codePoints.slice(0, 20).join(' ')}\n`);
+                    
+                    // Show byte representation
+                    const bytes = Buffer.from(first50, 'utf8');
+                    process.stderr.write(`\n💾 UTF-8 bytes (hex):\n${bytes.toString('hex').match(/.{1,2}/g).slice(0, 30).join(' ')}\n`);
+                    
+                    // Extract and show emojis specifically
+                    if (hasEmojiFlag) {
+                        const emojiMatches = tweetData.text.match(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F270}\u{238C}-\u{2454}\u{20D0}-\u{20FF}]/gu);
+                        if (emojiMatches) {
+                            process.stderr.write(`\n😀 Detected emojis: ${emojiMatches.join(' ')}\n`);
+                        }
+                    }
+                }
+            } else {
+                process.stderr.write(`❌ Status: FAILED (no data extracted)\n`);
             }
+            process.stderr.write(`${'─'.repeat(60)}\n\n`);
 
             // Download images with timeout protection
             if (tweetData && tweetData.images && tweetData.images.length > 0 && !tweetData.hasVideo) {
-                process.stderr.write(`Downloading ${tweetData.images.length} images...\n`);
+                process.stderr.write(`\n${'─'.repeat(60)}\n`);
+                process.stderr.write(`📥 DOWNLOADING ${tweetData.images.length} IMAGE(S)\n`);
+                process.stderr.write(`${'─'.repeat(60)}\n`);
                 
                 const downloadPromises = tweetData.images.map(async (imgUrl, i) => {
                     const highResUrl = imgUrl.split('?')[0] + '?name=orig';
                     const filename = `tweet_img_${i}.jpg`;
                     
+                    process.stderr.write(`\n📥 [Image ${i}] Starting download...\n`);
+                    process.stderr.write(`   URL: ${highResUrl}\n`);
+                    
                     try {
+                        const dlStart = Date.now();
                         await downloadImage(highResUrl, filename, 15000);
+                        const dlTime = Date.now() - dlStart;
                         const stats = fs.statSync(filename);
-                        process.stderr.write(`✓ Downloaded ${filename} (${stats.size} bytes)\n`);
-                        return true;
+                        
+                        process.stderr.write(`   ✅ Downloaded in ${dlTime}ms\n`);
+                        process.stderr.write(`   📦 File size: ${stats.size} bytes (${(stats.size / 1024).toFixed(2)} KB)\n`);
+                        process.stderr.write(`   💾 Saved as: ${filename}\n`);
+                        
+                        return { success: true, filename, size: stats.size };
                     } catch (e) {
-                        process.stderr.write(`✗ Failed ${filename}: ${e.message}\n`);
-                        return false;
+                        process.stderr.write(`   ❌ Download failed: ${e.message}\n`);
+                        return { success: false, filename, error: e.message };
                     }
                 });
 
-                await Promise.race([
+                const downloadResults = await Promise.race([
                     Promise.all(downloadPromises),
                     new Promise((_, reject) => 
                         setTimeout(() => reject(new Error('Image download timeout')), 30000)
                     )
                 ]).catch(err => {
-                    process.stderr.write(`Image download error: ${err.message}\n`);
+                    process.stderr.write(`\n❌ Image download error: ${err.message}\n`);
+                    return [];
                 });
+
+                const successCount = downloadResults.filter(r => r.success).length;
+                process.stderr.write(`\n📊 Download Summary: ${successCount}/${tweetData.images.length} successful\n`);
+                process.stderr.write(`${'─'.repeat(60)}\n\n`);
+            } else if (tweetData && tweetData.hasVideo) {
+                process.stderr.write(`\n⏭️  Skipping image download (tweet contains video)\n\n`);
+            } else if (tweetData && (!tweetData.images || tweetData.images.length === 0)) {
+                process.stderr.write(`\n⏭️  No images to download\n\n`);
             }
 
             const totalTime = Date.now() - startTime;
-            process.stderr.write(`Total execution time: ${totalTime}ms\n`);
+            
+            process.stderr.write(`\n${'='.repeat(60)}\n`);
+            process.stderr.write(`✅ SCRAPER COMPLETE\n`);
+            process.stderr.write(`${'='.repeat(60)}\n`);
+            process.stderr.write(`⏱️  Total execution time: ${totalTime}ms (${(totalTime / 1000).toFixed(2)}s)\n`);
+            process.stderr.write(`🕐 Completed at: ${new Date().toISOString()}\n`);
+            process.stderr.write(`${'='.repeat(60)}\n\n`);
 
-            // Output the JSON result
+            // Output the JSON result to stdout
             console.log(JSON.stringify(tweetData));
             
             // Success! Break the retry loop
@@ -229,19 +306,24 @@ async function getLatestTweet(username) {
             return;
 
         } catch (error) {
-            process.stderr.write(`\n❌ ERROR on attempt ${attempt}: ${error.message}\n`);
-            process.stderr.write(`Stack: ${error.stack}\n`);
+            process.stderr.write(`\n${'!'.repeat(60)}\n`);
+            process.stderr.write(`❌ ERROR ON ATTEMPT ${attempt}\n`);
+            process.stderr.write(`${'!'.repeat(60)}\n`);
+            process.stderr.write(`Error message: ${error.message}\n`);
+            process.stderr.write(`Error stack:\n${error.stack}\n`);
+            process.stderr.write(`${'!'.repeat(60)}\n\n`);
             
             if (browser) {
                 await browser.close();
-                process.stderr.write('Browser closed\n');
+                process.stderr.write('🔒 Browser closed\n');
             }
             
             if (attempt >= maxAttempts) {
+                process.stderr.write(`\n💀 All ${maxAttempts} attempts failed. Giving up.\n`);
                 console.log(JSON.stringify({ error: error.message }));
             } else {
-                process.stderr.write('Will retry...\n');
-                await new Promise(r => setTimeout(r, 3000)); // Wait before retry
+                process.stderr.write('🔄 Will retry in 3 seconds...\n\n');
+                await new Promise(r => setTimeout(r, 3000));
             }
         }
     }
