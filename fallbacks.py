@@ -24,6 +24,7 @@ SERVANTS_MAP = {
     "nightingale": {"img": "Nightingale.jpg", "alt": "Nightingale Pickup Summon"},
     "altria pendragon": {"img": "Altria Pendragon.jpg", "alt": "Altria Pendragon Pickup Summon"},
     "vritra": {"img": "Vritra.jpg", "alt": "Vritra Pickup Summon"},
+    "richard i": {"img": "Richard I.jpg", "alt": "Richard I Pickup Summon"},
     "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia Pickup Summon"},
 }
 
