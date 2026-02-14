@@ -105,13 +105,37 @@ async function getLatestTweet(username) {
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
-                // Force original quality
-                const highResUrl = tweetData.images[i].split('?')[0] + '?name=orig';
+                const originalUrl = tweetData.images[i];
+                let highResUrl;
+                
+                // Twitter images usually have format=jpg&name=small/medium/large
+                // We want to keep format but change name to 'orig'
+                if (originalUrl.includes('?')) {
+                    const [base, params] = originalUrl.split('?');
+                    const urlParams = new URLSearchParams(params);
+                    urlParams.set('name', 'orig');
+                    highResUrl = `${base}?${urlParams.toString()}`;
+                } else {
+                    // Fallback if no query params (shouldn't happen, but just in case)
+                    highResUrl = `${originalUrl}?format=jpg&name=orig`;
+                }
+                
                 try {
-                    const viewSource = await page.goto(highResUrl);
-                    fs.writeFileSync(`tweet_img_${i}.jpg`, await viewSource.buffer());
+                    const response = await page.goto(highResUrl, { 
+                        waitUntil: 'networkidle0',
+                        timeout: 15000 
+                    });
+                    
+                    if (response && response.ok()) {
+                        const buffer = await response.buffer();
+                        fs.writeFileSync(`tweet_img_${i}.jpg`, buffer);
+                    } else {
+                        process.stderr.write(`Failed image ${i}: Invalid response (status: ${response?.status()})\n`);
+                        process.stderr.write(`URL attempted: ${highResUrl}\n`);
+                    }
                 } catch (e) {
                     process.stderr.write(`Failed image ${i}: ${e.message}\n`);
+                    process.stderr.write(`URL attempted: ${highResUrl}\n`);
                 }
             }
         }
