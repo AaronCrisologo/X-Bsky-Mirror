@@ -43,18 +43,26 @@ DEFAULT_FALLBACK = os.path.join(IMAGE_DIR, "general_fallback.jpg")
 DEFAULT_ALT = "FGO Update Image"
 
 def get_fallback_data(post_text):
-    """
-    Returns a tuple of (image_path, alt_text) based on keywords.
-    """
     if not post_text:
         return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
     
+    # Store potential matches as: (index, image_path, alt_text)
+    matches = []
+
     for keyword, data in KEYWORD_MAP.items():
-        if keyword in text_lower:
+        index = text_lower.find(keyword)
+        if index != -1:
             full_path = os.path.join(IMAGE_DIR, data["img"])
+            # Only add to list if the file actually exists
             if os.path.exists(full_path):
-                return full_path, data["alt"]
+                matches.append((index, full_path, data["alt"]))
+
+    if matches:
+        # Sort by the index (the first element in each tuple)
+        # This picks the word that appears closest to the start of the string
+        matches.sort(key=lambda x: x[0])
+        return matches[0][1], matches[0][2]
     
     return DEFAULT_FALLBACK, DEFAULT_ALT
