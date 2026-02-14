@@ -149,4 +149,4 @@ async function getLatestTweet(username) {
     }
 }
 
-getLatestTweet('goodsmile_en');
+getLatestTweet('FateGO_USA');
