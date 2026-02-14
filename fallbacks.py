@@ -4,27 +4,27 @@ IMAGE_DIR = "assets/images/"
 
 # 1. Define your specific keyword-to-image/alt mapping
 SERVANTS_MAP = {
-    "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber)"},
-    "durga": {"img": "Durga.jpg", "alt": "Durga"},
-    "bhima": {"img": "Bhima.jpg", "alt": "Bhima"},
-    "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana"},
-    "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne"},
-    "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote"},
-    "dioscuri": {"img": "Dioscuri.jpg", "alt": "Dioscuri"},
-    "altera": {"img": "Altera.jpg", "alt": "Altera"},
-    "bradamante": {"img": "Bradamante.jpg", "alt": "Bradamante"},
-    "jack the ripper": {"img": "Jack the Ripper.jpg", "alt": "Jack the Ripper"},
-    "mordred": {"img": "Mordred.jpg", "alt": "Mordred"},
-    "nitocris (Alter)": {"img": "Nitocris (Alter).jpg", "alt": "Nitocris (Alter)"},
-    "kashin koji": {"img": "Kashin Koji.jpg", "alt": "Kashin Koji"},
-    "galatea": {"img": "Galatea.jpg", "alt": "Galatea"},
-    "jeanne d'Arc": {"img": "Jeanne d'Arc.jpg", "alt": "Jeanne d'Arc"},
-    "osakabehime": {"img": "Osakabehime.jpg", "alt": "Osakabehime"},
-    "ganesha (jinako)": {"img": "Ganesha (Jinako).jpg", "alt": "Ganesha (Jinako)"},
-    "nightingale": {"img": "Nightingale.jpg", "alt": "Nightingale"},
-    "altria pendragon": {"img": "Altria Pendragon.jpg", "alt": "Altria Pendragon"},
-    "vritra": {"img": "Vritra.jpg", "alt": "Vritra"},
-    "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia"},
+    "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber) Pickup Summon"},
+    "durga": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
+    "bhima": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
+    "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana Pickup Summon"},
+    "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne Pickup Summon"},
+    "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote Pickup Summon"},
+    "dioscuri": {"img": "Dioscuri.jpg", "alt": "Dioscuri Pickup Summon"},
+    "altera": {"img": "Altera.jpg", "alt": "Altera Pickup Summon"},
+    "bradamante": {"img": "Bradamante.jpg", "alt": "Bradamante Pickup Summon"},
+    "jack the ripper": {"img": "Jack the Ripper.jpg", "alt": "Jack the Ripper Pickup Summon"},
+    "mordred": {"img": "Mordred.jpg", "alt": "Mordred Pickup Summon"},
+    "nitocris (alter)": {"img": "Nitocris (Alter).jpg", "alt": "Nitocris (Alter) Pickup Summon"},
+    "kashin koji": {"img": "Kashin Koji.jpg", "alt": "Kashin Koji Pickup Summon"},
+    "galatea": {"img": "Galatea.jpg", "alt": "Galatea Pickup Summon"},
+    "jeanne d'arc": {"img": "Jeanne d'Arc.jpg", "alt": "Jeanne d'Arc Pickup Summon"},
+    "osakabehime": {"img": "Osakabehime.jpg", "alt": "Osakabehime Pickup Summon"},
+    "ganesha (jinako)": {"img": "Ganesha (Jinako).jpg", "alt": "Ganesha (Jinako) Pickup Summon"},
+    "nightingale": {"img": "Nightingale.jpg", "alt": "Nightingale Pickup Summon"},
+    "altria pendragon": {"img": "Altria Pendragon.jpg", "alt": "Altria Pendragon Pickup Summon"},
+    "vritra": {"img": "Vritra.jpg", "alt": "Vritra Pickup Summon"},
+    "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia Pickup Summon"},
 }
 
 KEYWORD_MAP = {
@@ -47,22 +47,32 @@ def get_fallback_data(post_text):
         return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
-    
-    # Store potential matches as: (index, image_path, alt_text)
-    matches = []
+    all_matches = []
 
     for keyword, data in KEYWORD_MAP.items():
-        index = text_lower.find(keyword)
-        if index != -1:
+        # Find all occurrences of this keyword in the text
+        start_search = 0
+        while True:
+            index = text_lower.find(keyword, start_search)
+            if index == -1:
+                break
+            
             full_path = os.path.join(IMAGE_DIR, data["img"])
-            # Only add to list if the file actually exists
             if os.path.exists(full_path):
-                matches.append((index, full_path, data["alt"]))
+                # We store: (Position, Negative Length, Path, Alt)
+                # We use negative length because sorted() goes smallest to largest,
+                # so -14 (Medusa Saber) will come before -6 (Medusa).
+                all_matches.append((index, -len(keyword), full_path, data["alt"]))
+            
+            # Move past this occurrence to find the next one (if any)
+            start_search = index + 1
 
-    if matches:
-        # Sort by the index (the first element in each tuple)
-        # This picks the word that appears closest to the start of the string
-        matches.sort(key=lambda x: x[0])
-        return matches[0][1], matches[0][2]
-    
+    if all_matches:
+        # Sorts by index first, then by the longest length
+        all_matches.sort() 
+        
+        # Return the winner (first index, longest name)
+        winner = all_matches[0]
+        return winner[2], winner[3]
+
     return DEFAULT_FALLBACK, DEFAULT_ALT
