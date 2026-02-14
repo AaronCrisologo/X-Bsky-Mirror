@@ -149,4 +149,4 @@ async function getLatestTweet(username) {
     }
 }
 
-getLatestTweet('13sar_atlus');
+getLatestTweet('goodsmile_en');
