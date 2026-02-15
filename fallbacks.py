@@ -48,25 +48,28 @@ def get_fallback_data(post_text):
         return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
+    
+    # Check if this is a legitimate "Pickup Summon" post
+    is_pickup = "pickup summon" in text_lower
 
-    # 1. PRIORITY CHECK: Look for Servants first
-    servant_matches = []
-    for name, data in SERVANTS_MAP.items():
-        if name in text_lower:
-            # We still track length to catch "Altria Pendragon" over "Altria"
-            servant_matches.append((-len(name), data))
+    # 1. PRIORITY CHECK: Look for Servants ONLY if "Pickup Summon" is present
+    if is_pickup:
+        servant_matches = []
+        for name, data in SERVANTS_MAP.items():
+            if name in text_lower:
+                # Store length to prioritize "Altria Pendragon" over "Altria"
+                servant_matches.append((-len(name), data))
 
-    if servant_matches:
-        # Sort by longest name first to handle overlaps
-        servant_matches.sort()
-        winner_data = servant_matches[0][1]
-        full_path = os.path.join(IMAGE_DIR, winner_data["img"])
-        if os.path.exists(full_path):
-            return full_path, winner_data["alt"]
+        if servant_matches:
+            servant_matches.sort()
+            winner_data = servant_matches[0][1]
+            full_path = os.path.join(IMAGE_DIR, winner_data["img"])
+            if os.path.exists(full_path):
+                return full_path, winner_data["alt"]
 
-    # 2. FALLBACK CHECK: Look for general keywords if no servant matched
+    # 2. FALLBACK CHECK: General keywords (Events, Trial Quests, etc.)
     for keyword, data in KEYWORD_MAP.items():
-        # Skip servants already checked in Step 1
+        # Skip servant-specific keys here to avoid duplicate logic
         if keyword in SERVANTS_MAP:
             continue
             
