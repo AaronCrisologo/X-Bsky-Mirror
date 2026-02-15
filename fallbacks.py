@@ -48,32 +48,31 @@ def get_fallback_data(post_text):
         return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
-    all_matches = []
 
+    # 1. PRIORITY CHECK: Look for Servants first
+    servant_matches = []
+    for name, data in SERVANTS_MAP.items():
+        if name in text_lower:
+            # We still track length to catch "Altria Pendragon" over "Altria"
+            servant_matches.append((-len(name), data))
+
+    if servant_matches:
+        # Sort by longest name first to handle overlaps
+        servant_matches.sort()
+        winner_data = servant_matches[0][1]
+        full_path = os.path.join(IMAGE_DIR, winner_data["img"])
+        if os.path.exists(full_path):
+            return full_path, winner_data["alt"]
+
+    # 2. FALLBACK CHECK: Look for general keywords if no servant matched
     for keyword, data in KEYWORD_MAP.items():
-        # Find all occurrences of this keyword in the text
-        start_search = 0
-        while True:
-            index = text_lower.find(keyword, start_search)
-            if index == -1:
-                break
+        # Skip servants already checked in Step 1
+        if keyword in SERVANTS_MAP:
+            continue
             
+        if keyword in text_lower:
             full_path = os.path.join(IMAGE_DIR, data["img"])
             if os.path.exists(full_path):
-                # We store: (Position, Negative Length, Path, Alt)
-                # We use negative length because sorted() goes smallest to largest,
-                # so -14 (Medusa Saber) will come before -6 (Medusa).
-                all_matches.append((index, -len(keyword), full_path, data["alt"]))
-            
-            # Move past this occurrence to find the next one (if any)
-            start_search = index + 1
-
-    if all_matches:
-        # Sorts by index first, then by the longest length
-        all_matches.sort() 
-        
-        # Return the winner (first index, longest name)
-        winner = all_matches[0]
-        return winner[2], winner[3]
+                return full_path, data["alt"]
 
     return DEFAULT_FALLBACK, DEFAULT_ALT
