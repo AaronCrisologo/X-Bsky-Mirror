@@ -19,6 +19,7 @@ SERVANTS_MAP = {
     "kashin koji": {"img": "Kashin Koji.jpg", "alt": "Kashin Koji Pickup Summon"},
     "galatea": {"img": "Galatea.jpg", "alt": "Galatea Pickup Summon"},
     "jeanne d'arc": {"img": "Jeanne d'Arc.jpg", "alt": "Jeanne d'Arc Pickup Summon"},
+    "j'eanne d'arc": {"img": "Jeanne d'Arc.jpg", "alt": "Jeanne d'Arc Pickup Summon"},
     "osakabehime": {"img": "Osakabehime.jpg", "alt": "Osakabehime Pickup Summon"},
     "ganesha (jinako)": {"img": "Ganesha (Jinako).jpg", "alt": "Ganesha (Jinako) Pickup Summon"},
     "nightingale": {"img": "Nightingale.jpg", "alt": "Nightingale Pickup Summon"},
