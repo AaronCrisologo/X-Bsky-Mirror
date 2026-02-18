@@ -95,7 +95,7 @@ def is_already_posted(client, new_text):
 
 
 # === CONFIGURATION ===
-SIMULATION_MODE = False  # Set to False to use the real scraper
+SIMULATION_MODE = True  # Set to False to use the real scraper
 
 def main():
     client = Client()
@@ -113,11 +113,19 @@ def main():
         print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
         
         tweet_data = {
-            'text': """★5 (SSR) Andromeda, a sacrificial maiden described in Greek mythology, is a new Servant available during the Valentine's 2026 Pickup Summon!
+                        'text': """Testing:
+            ★5 (SSR) Andromeda
 
+            fate-go.us/valentines2026/
 
+            fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0204_sf_pu2%2F
 
-More info ➡️ fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0203_valentine_2026_pu%2F
+            youtu.be/uAB02z1coVI
+
+            https://anime.fate-go.us/lostfujimaru/
+
+            ➡️
+
 #FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
