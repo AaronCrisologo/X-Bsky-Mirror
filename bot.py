@@ -116,17 +116,10 @@ def main():
                         'text': """Testing:
             ★5 (SSR) Andromeda
             "I am totally a god...Revere me. Fear me, and make sure you don't overwork me...me...me...(Echo)"
-
-            fate-go.us/valentines2026/
-
             fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0204_sf_pu2%2F
-
             youtu.be/uAB02z1coVI
-
             https://anime.fate-go.us/lostfujimaru/
-
             ➡️
-
 #FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [], # You can add local paths here if you have test images
