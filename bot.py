@@ -115,6 +115,7 @@ def main():
         tweet_data = {
                         'text': """Testing:
             ★5 (SSR) Andromeda
+            "I am totally a god...Revere me. Fear me, and make sure you don't overwork me...me...me...(Echo)"
 
             fate-go.us/valentines2026/
 
@@ -218,7 +219,7 @@ def main():
 
             # 3. Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
-            pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|#\w+)')
+            pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?(?=[^a-zA-Z0-9/_-]|$)|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?(?=[^a-zA-Z0-9/_-]|$)|#\w+)')
             last_idx = 0
             
             for match in pattern.finditer(display_text):
