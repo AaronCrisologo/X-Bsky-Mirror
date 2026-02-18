@@ -210,7 +210,7 @@ More info ➡️ fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0203_
 
             # 3. Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
-            pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}\b|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|#\w+)')
+            pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?\b|#\w+)')
             last_idx = 0
             
             for match in pattern.finditer(display_text):
