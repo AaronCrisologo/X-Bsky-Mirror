@@ -32,6 +32,7 @@ SERVANTS_MAP = {
 KEYWORD_MAP = {
     **SERVANTS_MAP,
     "pickup summon": {"img": "summon_fallback.jpg", "alt": "Pickup Summon Announcement"},
+    "login bonus": {"img": "loginBonus.jpg", "alt": "Login Bonus"},
     "event": {"img": "event_fallback.jpg", "alt": "New Event Details"},
     "learning with manga": {"img": "learning.png", "alt": "Learning with Manga Update"},
     "exchange ticket": {"img": "ticket_fallback.jpg", "alt": "Exchange Ticket Info"},
