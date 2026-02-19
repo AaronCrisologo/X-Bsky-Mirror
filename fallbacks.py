@@ -35,11 +35,12 @@ KEYWORD_MAP = {
     "login bonus": {"img": "loginBonus.jpg", "alt": "Login Bonus"},
     "event": {"img": "event_fallback.jpg", "alt": "New Event Details"},
     "learning with manga": {"img": "learning.png", "alt": "Learning with Manga Update"},
+    "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"},
+    "short animation": {"img": "fujimaru.jpg", "alt": "Fujimaru Short Animation"},
+    "tips": {"img": "tips.png", "alt": "FGO TIPS"},
     "exchange ticket": {"img": "ticket_fallback.jpg", "alt": "Exchange Ticket Info"},
     "achieved": {"img": "achieved.jpg", "alt": "Milestone Achieved"},
-    "debuts": {"img": "debut_fallback.jpg", "alt": "Character Debut Announcement"},
-    "short animation": {"img": "fujimaru.jpg", "alt": "Fujimaru Short Animation"},
-    "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"}
+    "debuts": {"img": "debut_fallback.jpg", "alt": "Character Debut Announcement"}
 }
 
 DEFAULT_FALLBACK = os.path.join(IMAGE_DIR, "general_fallback.jpg")
