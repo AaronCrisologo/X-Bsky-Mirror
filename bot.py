@@ -95,7 +95,7 @@ def is_already_posted(client, new_text):
 
 
 # === CONFIGURATION ===
-SIMULATION_MODE = True  # Set to False to use the real scraper
+SIMULATION_MODE = False  # Set to False to use the real scraper
 
 def main():
     client = Client()
@@ -277,6 +277,10 @@ def main():
                 img_file = f"tweet_img_{i}.jpg"
                 if os.path.exists(img_file):
                     os.remove(img_file)
+            
+            # Cleanup temporary manga image if it exists
+            if os.path.exists("temp_manga.jpg"):
+                os.remove("temp_manga.jpg")
 
         except Exception as e:
             print(f"❌ Bluesky processing failed: {e}")
