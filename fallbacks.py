@@ -1,6 +1,9 @@
 import os
+import re
+import requests
 
 IMAGE_DIR = "assets/images/"
+TEMP_MANGA_PATH = "temp_manga.jpg"  # Temporary file for downloaded manga
 
 # 1. Define your specific keyword-to-image/alt mapping
 SERVANTS_MAP = {
@@ -104,11 +107,49 @@ KEYWORD_MAP = {
 DEFAULT_FALLBACK = os.path.join(IMAGE_DIR, "general_fallback.jpg")
 DEFAULT_ALT = "FGO Update Image"
 
+def download_manga_image(episode_number):
+    """
+    Downloads the manga image for a specific episode number.
+    Returns the path to the downloaded image, or None if failed.
+    """
+    try:
+        url = f"https://fate-go.us/manga_fgo3/images/comic{episode_number}/comic{episode_number}.jpg"
+        print(f"Attempting to download manga image from: {url}")
+        
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # Raises an error for bad status codes
+        
+        # Save the image
+        with open(TEMP_MANGA_PATH, 'wb') as f:
+            f.write(response.content)
+        
+        print(f"✅ Successfully downloaded manga episode {episode_number}")
+        return TEMP_MANGA_PATH
+        
+    except Exception as e:
+        print(f"❌ Failed to download manga image: {e}")
+        return None
+
 def get_fallback_data(post_text):
     if not post_text:
         return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
+    
+    # SPECIAL CASE: Learning with Manga - try to download specific episode
+    if "learning with manga" in text_lower or "learning with" in text_lower:
+        # Look for patterns like "Episode 234" or "episode 234"
+        episode_match = re.search(r'episode\s+(\d+)', post_text, re.IGNORECASE)
+        
+        if episode_match:
+            episode_number = episode_match.group(1)
+            downloaded_path = download_manga_image(episode_number)
+            
+            if downloaded_path and os.path.exists(downloaded_path):
+                return downloaded_path, f"Learning with Manga Episode {episode_number}"
+        
+        # If we couldn't extract episode or download failed, fall through to static fallback
+        print("Falling back to static manga image")
     
     # Check if this is a legitimate "Pickup Summon" post
     is_pickup = "pickup summon" in text_lower

@@ -277,6 +277,10 @@ def main():
                 img_file = f"tweet_img_{i}.jpg"
                 if os.path.exists(img_file):
                     os.remove(img_file)
+            
+            # Cleanup temporary manga image if it exists
+            if os.path.exists("temp_manga.jpg"):
+                os.remove("temp_manga.jpg")
 
         except Exception as e:
             print(f"❌ Bluesky processing failed: {e}")
