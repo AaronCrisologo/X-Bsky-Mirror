@@ -8,6 +8,7 @@ SERVANTS_MAP = {
     "durga": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
     "durgā": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
     "bhima": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
+    "bhīma": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
     "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana Pickup Summon"},
     "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne Pickup Summon"},
     "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote Pickup Summon"},
