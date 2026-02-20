@@ -6,6 +6,7 @@ IMAGE_DIR = "assets/images/"
 SERVANTS_MAP = {
     "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber) Pickup Summon"},
     "durga": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
+    "durgā": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
     "bhima": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
     "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana Pickup Summon"},
     "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne Pickup Summon"},
