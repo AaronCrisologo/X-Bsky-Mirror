@@ -1,12 +1,20 @@
 import os
+import re
+import requests
 
 IMAGE_DIR = "assets/images/"
+TEMP_MANGA_PATH = "temp_manga.jpg"  # Temporary file for downloaded manga
 
 # 1. Define your specific keyword-to-image/alt mapping
 SERVANTS_MAP = {
     "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber) Pickup Summon"},
     "durga": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
+    "durgā": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
     "bhima": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
+    "bhīma": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
+    "bakin": {"img": "bakin.png", "alt": "Kyokutei Bakin Pickup Summon"},
+    "suzuka gozen (rider)": {"img": "vacay.jpg", "alt": "Suzuka Gozen (Rider) Pickup Summon"},
+    "vacay": {"img": "vacay.jpg", "alt": "Suzuka Gozen (Rider) Pickup Summon"},
     "duryodhana": {"img": "Duryodhana.jpg", "alt": "Duryodhana Pickup Summon"},
     "charlemagne": {"img": "Charlemagne.jpg", "alt": "Charlemagne Pickup Summon"},
     "don quixote": {"img": "Don Quixote.jpg", "alt": "Don Quixote Pickup Summon"},
@@ -27,28 +35,121 @@ SERVANTS_MAP = {
     "vritra": {"img": "Vritra.jpg", "alt": "Vritra Pickup Summon"},
     "richard i": {"img": "Richard I.jpg", "alt": "Richard I Pickup Summon"},
     "anastasia": {"img": "Anastasia.jpg", "alt": "Anastasia Pickup Summon"},
+    "cu chulainn alter": {"img": "Cu Chulainn (Alter).jpg", "alt": "Cu Chulainn (Alter) Pickup Summon"},
+    "cu chulainn (alter)": {"img": "Cu Chulainn (Alter).jpg", "alt": "Cu Chulainn (Alter) Pickup Summon"},
+    "cú chulainn alter": {"img": "Cu Chulainn (Alter).jpg", "alt": "Cu Chulainn (Alter) Pickup Summon"},
+    "cú chulainn (alter)": {"img": "Cu Chulainn (Alter).jpg", "alt": "Cu Chulainn (Alter) Pickup Summon"},
+    "nikola tesla": {"img": "Nikola Tesla.jpg", "alt": "Nikola Tesla Pickup Summon"},
+    "li shuwen": {"img": "Li Shuwen (Assassin).jpg", "alt": "Li Shuwen (Assassin) Pickup Summon"},
+    "xiang yu": {"img": "Xiang Yu.jpg", "alt": "Xiang Yu Pickup Summon"},
+    "napoleon": {"img": "Napoleon.jpg", "alt": "Napoleon Pickup Summon"},
+    "napoléon ": {"img": "Napoleon.jpg", "alt": "Napoleon Pickup Summon"},
+    "achilles": {"img": "Achilles.jpg", "alt": "Achilles Pickup Summon"},
+    "karna": {"img": "Karna.jpg", "alt": "Karna Pickup Summon"},
+    "vlad iii": {"img": "Vlad III.jpg", "alt": "Vlad III Pickup Summon"},
+    "enkidu": {"img": "Enkidu.jpg", "alt": "Enkidu Pickup Summon"},
+    "minamoto no tametomo": {"img": "Minamoto-no-Tametomo.jpg", "alt": "Minamoto-no-Tametomo Pickup Summon"},
+    "minamoto-no-tametomo": {"img": "Minamoto-no-Tametomo.jpg", "alt": "Minamoto-no-Tametomo Pickup Summon"},
+    "ozymandias": {"img": "Ozymandias.jpg", "alt": "Ozymandias Pickup Summon"},
+    "arjuna": {"img": "Arjuna.jpg", "alt": "Arjuna Pickup Summon"},
+    "taigong wang": {"img": "Taigong Wang.jpg", "alt": "Taigong Wang Pickup Summon"},
+    "tai gong wang": {"img": "Taigong Wang.jpg", "alt": "Taigong Wang Pickup Summon"},
+    "nemo": {"img": "Nemo.jpg", "alt": "Nemo Pickup Summon"},
+    "astolfo (saber)": {"img": "Astolfo (Saber).jpg", "alt": "Astolfo (Saber) Pickup Summon"},
+    "roland": {"img": "Roland.jpg", "alt": "Roland Pickup Summon"},
+    "takasugi shinsaku": {"img": "Takasugi Shinsaku.jpg", "alt": "Takasugi Shinsaku Pickup Summon"},
+    "arthur pendragon": {"img": "Arthur Pendragon.jpg", "alt": "Arthur Pendragon (Prototype) Pickup Summon"},
+    "arjuna (alter)": {"img": "Arjuna (Alter).jpg", "alt": "Arjuna (Alter) Pickup Summon"},
+    "amakusa shirou": {"img": "Amakusa Shirou.jpg", "alt": "Amakusa Shirou Pickup Summon"},
+    "amakusa shirō": {"img": "Amakusa Shirou.jpg", "alt": "Amakusa Shirou Pickup Summon"},
+    "odysseus": {"img": "Odysseus.jpg", "alt": "Odysseus Pickup Summon"},
+    "archer of shinjuku": {"img": "Archer of Shinjuku.jpg", "alt": "Archer of Shinjuku Pickup Summon"},
+    "james moriarty": {"img": "Archer of Shinjuku.jpg", "alt": "Archer of Shinjuku Pickup Summon"},
+    "zhuge liang": {"img": "Zhuge Liang.jpg", "alt": "Zhuge Liang (El-Melloi II) Pickup Summon"},
+    "edmond dantes": {"img": "Edmond Dantes.jpg", "alt": "Edmond Dantes Pickup Summon"},
+    "edmond dantès": {"img": "Edmond Dantes.jpg", "alt": "Edmond Dantes Pickup Summon"},
+    "marie antoinette (alter)": {"img": "Marie Antoinette (Alter).jpg", "alt": "Marie Antoinette (Alter) Pickup Summon"},
+    "hassan of the shining star": {"img": "Hassan of the Shining Star.jpg", "alt": "Hassan of the Shining Star Pickup Summon"},
+    "jeanne d'arc (alter)": {"img": "Jeanne d'Arc (Alter).jpg", "alt": "Jeanne d'Arc (Alter) Pickup Summon"},
+    "j'eanne d'arc (alter)": {"img": "Jeanne d'Arc (Alter).jpg", "alt": "Jeanne d'Arc (Alter) Pickup Summon"},
+    "salieri": {"img": "Salieri.jpg", "alt": "Antonio Salieri Pickup Summon"},
+    "taira no kagekiyo": {"img": "Taira-no-Kagekiyo.jpg", "alt": "Taira-no-Kagekiyo Pickup Summon"},
+    "taira-no-kagekiyo": {"img": "Taira-no-Kagekiyo.jpg", "alt": "Taira-no-Kagekiyo Pickup Summon"},
+    "marie antoinette": {"img": "Marie Antoinette.jpg", "alt": "Marie Antoinette Pickup Summon"},
+    "the count of monte cristo": {"img": "The Count of Monte Cristo.jpg", "alt": "The Count of Monte Cristo Pickup Summon"},
+    "alessandro di cagliostro": {"img": "Alessandro di Cagliostro.jpg", "alt": "Alessandro di Cagliostro Pickup Summon"},
+    "altria caster": {"img": "Altria Caster.jpg", "alt": "Altria Caster Pickup Summon"},
+    "nitocris": {"img": "Nitocris.jpg", "alt": "Nitocris Pickup Summon"},
+    "astraea": {"img": "Astraea.jpg", "alt": "Astraea Pickup Summon"},
+    "meltryllis": {"img": "Meltryllis.jpg", "alt": "Meltryllis Pickup Summon"},
+    "quetzalcoatl": {"img": "Quetzalcoatl.jpg", "alt": "Quetzalcoatl Pickup Summon"},
+    "nero claudius (caster)": {"img": "Nero Claudius (Caster).jpg", "alt": "Nero Claudius (Caster) Pickup Summon"},
+    "frankenstein (saber)": {"img": "Frankenstein (Saber).jpg", "alt": "Frankenstein (Saber) Pickup Summon"},
+    "prince of lan ling": {"img": "Prince of Lan Ling.jpg", "alt": "Prince of Lan Ling Pickup Summon"},
+    "lanling wang": {"img": "Prince of Lan Ling.jpg", "alt": "Prince of Lan Ling Pickup Summon"},
+    "xu fu": {"img": "Xu Fu.jpg", "alt": "Xu Fu Pickup Summon"},
 }
 
 KEYWORD_MAP = {
     **SERVANTS_MAP,
     "pickup summon": {"img": "summon_fallback.jpg", "alt": "Pickup Summon Announcement"},
+    "login bonus": {"img": "loginBonus.jpg", "alt": "Login Bonus"},
+    "tips": {"img": "tips.png", "alt": "FGO TIPS"},
     "event": {"img": "event_fallback.jpg", "alt": "New Event Details"},
     "learning with manga": {"img": "learning.png", "alt": "Learning with Manga Update"},
+    "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"},
+    "short animation": {"img": "fujimaru.jpg", "alt": "Fujimaru Short Animation"},
     "exchange ticket": {"img": "ticket_fallback.jpg", "alt": "Exchange Ticket Info"},
     "achieved": {"img": "achieved.jpg", "alt": "Milestone Achieved"},
-    "debuts": {"img": "debut_fallback.jpg", "alt": "Character Debut Announcement"},
-    "short animation": {"img": "fujimaru.jpg", "alt": "Fujimaru Short Animation"},
-    "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"}
+    "debuts": {"img": "debut_fallback.jpg", "alt": "Character Debut Announcement"}
 }
 
 DEFAULT_FALLBACK = os.path.join(IMAGE_DIR, "general_fallback.jpg")
 DEFAULT_ALT = "FGO Update Image"
+
+def download_manga_image(episode_number):
+    """
+    Downloads the manga image for a specific episode number.
+    Returns the path to the downloaded image, or None if failed.
+    """
+    try:
+        url = f"https://fate-go.us/manga_fgo3/images/comic{episode_number}/comic{episode_number}.jpg"
+        print(f"Attempting to download manga image from: {url}")
+        
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # Raises an error for bad status codes
+        
+        # Save the image
+        with open(TEMP_MANGA_PATH, 'wb') as f:
+            f.write(response.content)
+        
+        print(f"✅ Successfully downloaded manga episode {episode_number}")
+        return TEMP_MANGA_PATH
+        
+    except Exception as e:
+        print(f"❌ Failed to download manga image: {e}")
+        return None
 
 def get_fallback_data(post_text):
     if not post_text:
         return DEFAULT_FALLBACK, DEFAULT_ALT
 
     text_lower = post_text.lower()
+    
+    # SPECIAL CASE: Learning with Manga - try to download specific episode
+    if "learning with manga" in text_lower or "learning with" in text_lower:
+        # Look for patterns like "Episode 234" or "episode 234"
+        episode_match = re.search(r'episode\s+(\d+)', post_text, re.IGNORECASE)
+        
+        if episode_match:
+            episode_number = episode_match.group(1)
+            downloaded_path = download_manga_image(episode_number)
+            
+            if downloaded_path and os.path.exists(downloaded_path):
+                return downloaded_path, f"Learning with Manga Episode {episode_number}"
+        
+        # If we couldn't extract episode or download failed, fall through to static fallback
+        print("Falling back to static manga image")
     
     # Check if this is a legitimate "Pickup Summon" post
     is_pickup = "pickup summon" in text_lower
