@@ -86,11 +86,11 @@ SERVANTS_MAP = {
 }
 
 KEYWORD_MAP = {
+    "limited time event": {"img": "event_fallback.png", "alt": "New Event Details"},
     **SERVANTS_MAP,
     "pickup summon": {"img": "summon_fallback.jpg", "alt": "Pickup Summon Announcement"},
     "login bonus": {"img": "loginBonus.jpg", "alt": "Login Bonus"},
     "tips": {"img": "tips.png", "alt": "FGO TIPS"},
-    "event": {"img": "event_fallback.jpg", "alt": "New Event Details"},
     "learning with manga": {"img": "learning.png", "alt": "Learning with Manga Update"},
     "ordeal call": {"img": "ordeal_fgo.jpg", "alt": "Ordeal Call Mission Update"},
     "short animation": {"img": "fujimaru.jpg", "alt": "Fujimaru Short Animation"},
