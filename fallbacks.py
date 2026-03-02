@@ -87,6 +87,8 @@ SERVANTS_MAP = {
 
 KEYWORD_MAP = {
     "limited time event": {"img": "event_fallback.png", "alt": "New Event Details"},
+    "Chaldea Boys Collection 2026": {"img": "event_fallback.png", "alt": "New Event Details"},
+    "CBC 2026": {"img": "event_fallback.png", "alt": "New Event Details"},
     **SERVANTS_MAP,
     "pickup summon": {"img": "summon_fallback.jpg", "alt": "Pickup Summon Announcement"},
     "login bonus": {"img": "loginBonus.jpg", "alt": "Login Bonus"},
@@ -152,11 +154,20 @@ def get_fallback_data(post_text):
     is_pickup = "pickup summon" in text_normalized  # also use normalized here
 
     if is_pickup:
-        search_text = re.split(r'["\u201c]', text_normalized)[0]
+        # 1. Split by quotes
+        parts = re.split(r'["\u201c\u201d]', text_normalized)
+        
+        # 2. Get the first part that actually contains text (the headline)
+        # This handles the case where the post STARTS with a quote
+        headline = ""
+        for part in parts:
+            if part.strip():
+                headline = part
+                break
         
         servant_matches = []
         for name, data in NORMALIZED_SERVANTS_MAP.items():
-            if name in search_text:
+            if name in headline: # Only search the headline, not the flavor text
                 servant_matches.append((-len(name), data))
 
         if servant_matches:
