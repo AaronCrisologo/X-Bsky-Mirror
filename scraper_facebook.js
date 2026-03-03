@@ -30,9 +30,58 @@ async function getLatestFacebookImage() {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
 
+        // Intercept responses BEFORE navigating so we catch everything that loads.
+        // When Facebook renders the feed, it requests the post images directly —
+        // we capture those bytes as they arrive, no re-fetching needed.
+        let capturedBuffer = null;
+        let capturedUrl = null;
+
+        page.on('response', async (response) => {
+            try {
+                const url = response.url();
+                const status = response.status();
+
+                // Only care about successful fbcdn image responses
+                if (status !== 200) return;
+                if (!url.includes('fbcdn.net')) return;
+
+                const ct = response.headers()['content-type'] || '';
+                if (!ct.startsWith('image/')) return;
+
+                // Skip static UI assets (rsrc.php = icons, sprites, etc.)
+                if (url.includes('rsrc.php')) return;
+
+                // Skip tiny avatar/icon images — profile pics use _n.jpg with cp0 crop
+                // and are very small. Post images use t39.30808 content type.
+                if (!url.includes('t39.30808')) return;
+
+                // Skip anything with avatar/profile-pic sizing in stp param
+                const stpMatch = url.match(/stp=([^&]+)/);
+                if (stpMatch) {
+                    const stp = stpMatch[1];
+                    // Avatar crops look like c197.0.506.506a — post images don't have this
+                    if (stp.includes('_s40x40') || stp.includes('_s60x60') || stp.includes('_s80x80')) return;
+                    // Skip cover/banner — they have very wide crop ratios or specific flags
+                    if (stp.includes('cp0') && stp.includes('506')) return;
+                }
+
+                const buffer = await response.buffer();
+
+                // Only keep images larger than 20KB — rules out thumbnails and icons
+                if (buffer.length < 20000) return;
+
+                // Keep the largest image we find — prefer post images over smaller ones
+                if (!capturedBuffer || buffer.length > capturedBuffer.length) {
+                    capturedBuffer = buffer;
+                    capturedUrl = url;
+                    process.stderr.write(`Captured post image (${buffer.length} bytes): ${url}\n`);
+                }
+            } catch (_) {}
+        });
+
         await page.goto(FB_PAGE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // Dismiss cookie/login popups if they appear
+        // Dismiss cookie/login popups
         try {
             const declineBtn = await page.$('[data-cookiebanner="accept_only_essential_button"]');
             if (declineBtn) await declineBtn.click();
@@ -42,104 +91,62 @@ async function getLatestFacebookImage() {
             if (closeBtn) await closeBtn.click();
         } catch (_) {}
 
+        // Scroll to trigger lazy-loaded feed images
         await new Promise(r => setTimeout(r, 2000));
-        await page.evaluate(() => window.scrollBy(0, 400));
-        await new Promise(r => setTimeout(r, 2000));
+        await page.evaluate(() => window.scrollBy(0, 500));
+        await new Promise(r => setTimeout(r, 3000));
 
-        // Use the original DOM selector approach that correctly finds the post image.
-        // FeedUnit_0 / FeedUnit_N selectors target the actual feed posts, not the banner.
-        const imageUrl = await page.evaluate(() => {
-            const selectors = [
-                '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
-                '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
-                'img[src*="fbcdn"][width]'
-            ];
-
-            for (const selector of selectors) {
-                const imgs = Array.from(document.querySelectorAll(selector));
-                const postImg = imgs.find(img => {
-                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                    return w > 200 && h > 200;
-                });
-                if (postImg) return postImg.src;
-            }
-            return null;
-        });
-
-        if (!imageUrl) {
-            process.stderr.write('No suitable post image found on Facebook page.\n');
+        if (!capturedBuffer) {
+            process.stderr.write('No post image was intercepted during page load.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
 
-        // Strip the 'stp' param — this is the only thing causing the low resolution.
-        // e.g. stp=dst-jpg_s565x565_tt6 forces Facebook CDN to resize down.
-        // Removing it serves the original full-resolution image.
-        let highResUrl;
-        try {
-            const parsed = new URL(imageUrl);
-            parsed.searchParams.delete('stp');
-            highResUrl = parsed.toString();
-        } catch (_) {
-            highResUrl = imageUrl;
-        }
+        // --- Attempt to get a higher resolution version ---
+        // The stp param controls resize: s565x565 → try s2048x2048.
+        // The oh= hash may or may not cover stp. We try — if it 403s we keep what we have.
+        if (capturedUrl && capturedUrl.includes('stp=')) {
+            const higherResUrl = capturedUrl.replace(
+                /stp=dst-jpg_s\d+x\d+/,
+                'stp=dst-jpg_s2048x2048'
+            );
 
-        process.stderr.write(`Original URL: ${imageUrl}\n`);
-        process.stderr.write(`High-res URL: ${highResUrl}\n`);
-
-        // Download using fetch() from inside the page so session cookies are preserved.
-        // page.goto() loses the auth context and gets a 403 on high-res CDN URLs.
-        const base64Data = await page.evaluate(async (url) => {
-            try {
-                const res = await fetch(url, { credentials: 'include' });
-                if (!res.ok) return null;
-                const arrayBuffer = await res.arrayBuffer();
-                const bytes = new Uint8Array(arrayBuffer);
-                let binary = '';
-                for (let i = 0; i < bytes.byteLength; i++) {
-                    binary += String.fromCharCode(bytes[i]);
-                }
-                return btoa(binary);
-            } catch (e) {
-                return null;
-            }
-        }, highResUrl);
-
-        if (base64Data) {
-            const buffer = Buffer.from(base64Data, 'base64');
-            fs.writeFileSync(OUTPUT_FILE, buffer);
-            process.stderr.write(`Saved high-res image to ${OUTPUT_FILE}\n`);
-            console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
-        } else {
-            // Fall back to the original low-res URL if high-res fetch failed
-            process.stderr.write('High-res fetch failed, falling back to original URL.\n');
-            const fallbackData = await page.evaluate(async (url) => {
+            if (higherResUrl !== capturedUrl) {
+                process.stderr.write(`Trying higher-res stp: ${higherResUrl}\n`);
                 try {
-                    const res = await fetch(url, { credentials: 'include' });
-                    if (!res.ok) return null;
-                    const arrayBuffer = await res.arrayBuffer();
-                    const bytes = new Uint8Array(arrayBuffer);
-                    let binary = '';
-                    for (let i = 0; i < bytes.byteLength; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                    }
-                    return btoa(binary);
-                } catch (e) {
-                    return null;
-                }
-            }, imageUrl);
+                    // Use a plain https request via Puppeteer CDP - avoids CORS, keeps cookies
+                    const cdpSession = await page.createCDPSession();
+                    const result = await cdpSession.send('Network.loadNetworkResource', {
+                        url: higherResUrl,
+                        frameId: page.mainFrame()._id || '',
+                        options: { disableCache: false, includeCredentials: true }
+                    });
 
-            if (fallbackData) {
-                const buffer = Buffer.from(fallbackData, 'base64');
-                fs.writeFileSync(OUTPUT_FILE, buffer);
-                process.stderr.write(`Saved fallback image to ${OUTPUT_FILE}\n`);
-                console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
-            } else {
-                process.stderr.write('Both high-res and fallback fetch failed.\n');
-                console.log(JSON.stringify({ error: 'download_failed' }));
+                    if (result && result.resource && result.resource.success) {
+                        process.stderr.write('Higher-res stp fetch succeeded via CDP.\n');
+                        // If CDP resource fetch worked, navigate to get the bytes
+                        const hResponse = await page.goto(higherResUrl, {
+                            waitUntil: 'networkidle0',
+                            timeout: 15000
+                        });
+                        if (hResponse && hResponse.ok()) {
+                            const hBuffer = await hResponse.buffer();
+                            if (hBuffer.length > capturedBuffer.length) {
+                                capturedBuffer = hBuffer;
+                                process.stderr.write(`Using higher-res image (${hBuffer.length} bytes).\n`);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    process.stderr.write(`Higher-res attempt failed (expected): ${e.message}\n`);
+                    // Keep the already-captured buffer — this is fine
+                }
             }
         }
+
+        fs.writeFileSync(OUTPUT_FILE, capturedBuffer);
+        process.stderr.write(`Saved to ${OUTPUT_FILE} (${capturedBuffer.length} bytes)\n`);
+        console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
 
     } catch (error) {
         process.stderr.write(`Facebook scraper error: ${error.message}\n`);
