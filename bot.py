@@ -69,6 +69,62 @@ def get_latest_tweet_data():
         return None
 
 
+def get_facebook_image():
+    """
+    Runs scraper_facebook.js to grab the latest post image from the Facebook page.
+    Returns the local file path (e.g. 'facebook_img.jpg') on success, or None on failure.
+    """
+    try:
+        my_env = os.environ.copy()
+        my_env["PYTHONIOENCODING"] = "utf-8"
+        my_env["PYTHONUTF8"] = "1"
+
+        print("Trying Facebook scraper for image...")
+
+        result = subprocess.run(
+            ['node', 'scraper_facebook.js'],
+            capture_output=True,
+            text=False,
+            env=my_env,
+            timeout=60  # Facebook can be slower, give it extra time
+        )
+
+        if result.stderr:
+            stderr_text = result.stderr.decode('utf-8', errors='ignore')
+            print(f"Facebook scraper stderr: {stderr_text}")
+
+        if not result.stdout:
+            print("Facebook scraper returned no output.")
+            return None
+
+        json_output = result.stdout.decode('utf-8', errors='strict').strip()
+
+        if "{" not in json_output:
+            print("Facebook scraper output was not JSON.")
+            return None
+
+        data = json.loads(json_output)
+
+        if "error" in data:
+            print(f"Facebook scraper error: {data['error']}")
+            return None
+
+        image_path = data.get("imagePath")
+        if image_path and os.path.exists(image_path):
+            print(f"✅ Facebook image retrieved: {image_path}")
+            return image_path
+
+        print("Facebook scraper succeeded but image file not found on disk.")
+        return None
+
+    except subprocess.TimeoutExpired:
+        print("Facebook scraper timed out.")
+        return None
+    except Exception as e:
+        print(f"Facebook scraper exception: {e}")
+        return None
+
+
 # === Bluesky: Check if already posted ===
 def is_already_posted(client, new_text):
     try:
@@ -175,19 +231,33 @@ def main():
             
             images_to_upload = []
             aspect_ratios = []
-            final_alt_text = "Update" 
+            final_alt_text = "Update"
 
-            # 1. Handle Images/Fallback
-            if (has_video or not image_urls):
-                chosen_fallback, fallback_alt = get_fallback_data(post_text)
-                final_alt_text = fallback_alt 
-                
-                if os.path.exists(chosen_fallback):
-                    with Image.open(chosen_fallback) as img:
+            # 1. Handle Images: tweet images → Facebook → fallback
+            if has_video or not image_urls:
+                # --- Try Facebook first ---
+                fb_image_path = get_facebook_image()
+
+                if fb_image_path:
+                    # Use the Facebook image
+                    with Image.open(fb_image_path) as img:
                         w, h = img.size
                         aspect_ratios = [{"width": w, "height": h}]
-                    with open(chosen_fallback, 'rb') as f:
+                    with open(fb_image_path, 'rb') as f:
                         images_to_upload = [f.read()]
+                    final_alt_text = "Update"
+                else:
+                    # --- Facebook failed: use local fallback ---
+                    print("Facebook image unavailable. Using local fallback.")
+                    chosen_fallback, fallback_alt = get_fallback_data(post_text)
+                    final_alt_text = fallback_alt
+
+                    if os.path.exists(chosen_fallback):
+                        with Image.open(chosen_fallback) as img:
+                            w, h = img.size
+                            aspect_ratios = [{"width": w, "height": h}]
+                        with open(chosen_fallback, 'rb') as f:
+                            images_to_upload = [f.read()]
             else:
                 for i in range(len(image_urls)):
                     filename = f"tweet_img_{i}.jpg"
@@ -255,7 +325,7 @@ def main():
             
             post_text_with_facets.text(display_text[last_idx:])
 
-            # 4. Send the post (FIXED INDENTATION HERE)
+            # 4. Send the post
             try:
                 if len(images_to_upload) >= 1:
                     client.send_images(
@@ -272,11 +342,15 @@ def main():
             except Exception as e:
                 print(f"❌ Post failed at API level: {e}")
 
-            # Cleanup image files
+            # Cleanup tweet image files
             for i in range(len(image_urls)):
                 img_file = f"tweet_img_{i}.jpg"
                 if os.path.exists(img_file):
                     os.remove(img_file)
+
+            # Cleanup Facebook image file
+            if os.path.exists("facebook_img.jpg"):
+                os.remove("facebook_img.jpg")
             
             # Cleanup temporary manga image if it exists
             if os.path.exists("temp_manga.jpg"):
