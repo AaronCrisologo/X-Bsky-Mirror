@@ -10,10 +10,6 @@ puppeteer.use(StealthPlugin());
 const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
-// Facebook session cookies — same pattern as X's auth_token/ct0.
-// Add FB_C_USER and FB_XS as GitHub Actions secrets.
-// To get these: log into Facebook in Chrome → DevTools → Application →
-// Cookies → facebook.com → copy values for "c_user" and "xs".
 const rawCookies = [
     { "domain": ".facebook.com", "name": "c_user", "value": process.env.FB_C_USER, "path": "/", "secure": true, "sameSite": "Lax" },
     { "domain": ".facebook.com", "name": "xs",     "value": process.env.FB_XS,     "path": "/", "secure": true, "sameSite": "Lax" }
@@ -47,14 +43,10 @@ async function getLatestFacebookImage() {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
 
-        // Inject session cookies before navigating — this is what gives us a logged-in
-        // session so Facebook serves full-resolution images instead of compressed previews.
         await page.setCookie(...rawCookies);
 
-        // Intercept all fbcdn image responses, store by filename keeping the largest buffer.
-        // With a logged-in session Facebook loads the full-res post image directly in the
-        // feed — we capture those bytes as they arrive so we never need to re-fetch.
-        const capturedImages = {}; // filename → largest buffer seen
+        // Phase 1: capture all feed-load images keyed by filename (for fallback)
+        const capturedImages = {};
 
         page.on('response', async (response) => {
             try {
@@ -64,10 +56,8 @@ async function getLatestFacebookImage() {
                 if (url.includes('rsrc.php')) return;
                 const ct = response.headers()['content-type'] || '';
                 if (!ct.startsWith('image/')) return;
-
                 const filename = getFilename(url);
                 if (!filename) return;
-
                 const buffer = await response.buffer();
                 if (!capturedImages[filename] || buffer.length > capturedImages[filename].length) {
                     capturedImages[filename] = buffer;
@@ -78,7 +68,6 @@ async function getLatestFacebookImage() {
 
         await page.goto(FB_PAGE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // No cookie/login popups expected with a valid session, but dismiss just in case
         try {
             const declineBtn = await page.$('[data-cookiebanner="accept_only_essential_button"]');
             if (declineBtn) await declineBtn.click();
@@ -92,8 +81,8 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Use the original v1 DOM selector that reliably identifies the correct post image.
-        const imageUrl = await page.evaluate(() => {
+        // Phase 2: DOM identifies the correct post image element
+        const postImageInfo = await page.evaluate(() => {
             const selectors = [
                 '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
                 '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
@@ -106,43 +95,119 @@ async function getLatestFacebookImage() {
                     const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
                     return w > 200 && h > 200;
                 });
-                if (postImg) return postImg.src;
+                if (postImg) {
+                    // Walk up to find a clickable link wrapping the image
+                    let clickTarget = postImg;
+                    let el = postImg;
+                    for (let i = 0; i < 8; i++) {
+                        if (!el) break;
+                        if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
+                            clickTarget = el;
+                            break;
+                        }
+                        el = el.parentElement;
+                    }
+                    return {
+                        src: postImg.src,
+                        // Return a CSS path we can use to click the element outside evaluate()
+                        isLink: clickTarget !== postImg,
+                        photoHref: clickTarget !== postImg ? clickTarget.href : null
+                    };
+                }
             }
             return null;
         });
 
-        if (!imageUrl) {
+        if (!postImageInfo) {
             process.stderr.write('No suitable post image found on Facebook page.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
 
-        const targetFilename = getFilename(imageUrl);
+        const targetFilename = getFilename(postImageInfo.src);
         process.stderr.write(`DOM identified post image: ${targetFilename}\n`);
 
-        // Use the intercepted buffer for this exact filename.
-        // With a logged-in session this will be the full-resolution version.
-        const buffer = capturedImages[targetFilename];
+        // Phase 3: click through to the photo viewer to get the full-res image
+        // We set up a NEW response listener that only triggers after the click,
+        // so we catch exactly the full-res image Facebook loads in the viewer.
+        let fullResBuffer = null;
+        let fullResBytes = 0;
 
-        if (buffer) {
-            process.stderr.write(`Saving intercepted image: ${buffer.length} bytes\n`);
-            fs.writeFileSync(OUTPUT_FILE, buffer);
-            console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
+        const fullResListener = async (response) => {
+            try {
+                if (response.status() !== 200) return;
+                const url = response.url();
+                if (!url.includes('fbcdn.net')) return;
+                if (url.includes('rsrc.php')) return;
+                const ct = response.headers()['content-type'] || '';
+                if (!ct.startsWith('image/')) return;
+
+                const filename = getFilename(url);
+                // Only care about the specific image we identified
+                if (filename !== targetFilename) return;
+
+                const buffer = await response.buffer();
+                if (buffer.length > fullResBytes) {
+                    fullResBuffer = buffer;
+                    fullResBytes = buffer.length;
+                    process.stderr.write(`Viewer loaded ${filename} at ${buffer.length} bytes\n`);
+                }
+            } catch (_) {}
+        };
+
+        page.on('response', fullResListener);
+
+        // Navigate to the photo viewer — if we found a /photo link use it directly,
+        // otherwise click the image itself
+        if (postImageInfo.photoHref) {
+            process.stderr.write(`Navigating to photo viewer: ${postImageInfo.photoHref}\n`);
+            await page.goto(postImageInfo.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
         } else {
-            // Fallback: image wasn't intercepted (e.g. lazy loaded after networkidle2).
-            // page.goto() with the session cookies still active should work fine here.
-            process.stderr.write(`No intercepted buffer for ${targetFilename}, downloading directly.\n`);
-            const response = await page.goto(imageUrl, { waitUntil: 'networkidle0', timeout: 15000 });
-            if (response && response.ok()) {
-                const dlBuffer = await response.buffer();
-                fs.writeFileSync(OUTPUT_FILE, dlBuffer);
-                process.stderr.write(`Saved via direct download: ${dlBuffer.length} bytes\n`);
-                console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
-            } else {
-                process.stderr.write(`Direct download failed (status: ${response?.status()})\n`);
-                console.log(JSON.stringify({ error: 'download_failed' }));
+            process.stderr.write('Clicking post image to open viewer...\n');
+            await page.evaluate((targetSrc) => {
+                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
+                const img = imgs.find(i => i.src === targetSrc);
+                if (img) {
+                    // Try clicking the wrapping element
+                    let el = img;
+                    for (let i = 0; i < 8; i++) {
+                        if (!el) break;
+                        if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
+                            el.click();
+                            return;
+                        }
+                        el = el.parentElement;
+                    }
+                    img.click();
+                }
+            }, postImageInfo.src);
+
+            try {
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+            } catch (_) {
+                // Modal viewer — no navigation event
             }
         }
+
+        // Give the viewer time to fully load the high-res image
+        await new Promise(r => setTimeout(r, 4000));
+
+        // Pick the best buffer: full-res from viewer if we got it, else feed capture
+        const feedBuffer = capturedImages[targetFilename];
+
+        if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
+            process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
+            fs.writeFileSync(OUTPUT_FILE, fullResBuffer);
+        } else if (feedBuffer) {
+            process.stderr.write(`Viewer didn't load higher res, using feed capture: ${feedBuffer.length} bytes\n`);
+            fs.writeFileSync(OUTPUT_FILE, feedBuffer);
+        } else {
+            process.stderr.write('No image buffer available.\n');
+            console.log(JSON.stringify({ error: 'download_failed' }));
+            return;
+        }
+
+        console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
 
     } catch (error) {
         process.stderr.write(`Facebook scraper error: ${error.message}\n`);
