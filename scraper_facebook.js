@@ -94,24 +94,33 @@ async function getLatestFacebookImage() {
         process.stderr.write(`Original URL: ${imageUrl}\n`);
         process.stderr.write(`High-res URL: ${highResUrl}\n`);
 
-        // Try high-res first, fall back to original if it fails
+        // Download using fetch() from inside the page so session cookies are preserved.
+        // page.goto() navigates away and loses the auth context, causing 403s on high-res URLs.
         let downloaded = false;
         for (const url of [highResUrl, imageUrl]) {
             try {
-                const response = await page.goto(url, {
-                    waitUntil: 'networkidle0',
-                    timeout: 15000
-                });
+                const base64Data = await page.evaluate(async (fetchUrl) => {
+                    const res = await fetch(fetchUrl, { credentials: 'include' });
+                    if (!res.ok) return null;
+                    const arrayBuffer = await res.arrayBuffer();
+                    // Convert to base64 so we can pass it out of the browser context
+                    const bytes = new Uint8Array(arrayBuffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.byteLength; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    return btoa(binary);
+                }, url);
 
-                if (response && response.ok()) {
-                    const buffer = await response.buffer();
+                if (base64Data) {
+                    const buffer = Buffer.from(base64Data, 'base64');
                     fs.writeFileSync(OUTPUT_FILE, buffer);
                     process.stderr.write(`Saved image from: ${url}\n`);
                     console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
                     downloaded = true;
                     break;
                 } else {
-                    process.stderr.write(`Failed (status ${response?.status()}) for: ${url}\n`);
+                    process.stderr.write(`fetch() returned null for: ${url}\n`);
                 }
             } catch (e) {
                 process.stderr.write(`Error fetching ${url}: ${e.message}\n`);
