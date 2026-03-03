@@ -10,14 +10,6 @@ puppeteer.use(StealthPlugin());
 const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
-function getFilename(url) {
-    try {
-        return new URL(url).pathname.split('/').pop();
-    } catch (_) {
-        return null;
-    }
-}
-
 async function getLatestFacebookImage() {
     const browser = await puppeteer.launch({
         headless: "new",
@@ -34,62 +26,52 @@ async function getLatestFacebookImage() {
 
     try {
         await page.setViewport({ width: 1280, height: 1000 });
+
+        // Set a realistic user agent to reduce bot detection
         await page.setUserAgent(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
 
-        // Intercept all fbcdn image responses and store by filename.
-        // We keep the largest buffer seen per filename (Facebook often loads
-        // a small thumbnail first, then a larger version — we want the largest).
-        const capturedImages = {}; // filename → largest buffer seen
-
-        page.on('response', async (response) => {
-            try {
-                if (response.status() !== 200) return;
-                const url = response.url();
-                if (!url.includes('fbcdn.net')) return;
-                if (url.includes('rsrc.php')) return;
-                const ct = response.headers()['content-type'] || '';
-                if (!ct.startsWith('image/')) return;
-
-                const filename = getFilename(url);
-                if (!filename) return;
-
-                const buffer = await response.buffer();
-                if (!capturedImages[filename] || buffer.length > capturedImages[filename].length) {
-                    capturedImages[filename] = buffer;
-                }
-            } catch (_) {}
-        });
-
         await page.goto(FB_PAGE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // Dismiss cookie/login popups
+        // Dismiss cookie/login popups if they appear
         try {
+            // "Decline optional cookies" button
             const declineBtn = await page.$('[data-cookiebanner="accept_only_essential_button"]');
             if (declineBtn) await declineBtn.click();
         } catch (_) {}
+
         try {
+            // Close login modal if present
             const closeBtn = await page.$('[aria-label="Close"]');
             if (closeBtn) await closeBtn.click();
         } catch (_) {}
 
+        // Wait a moment for any overlays to clear
         await new Promise(r => setTimeout(r, 2000));
+
+        // Scroll slightly to trigger lazy loading of post images
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Original working DOM selector — unchanged from first implementation
+        // Find the first post image on the page
         const imageUrl = await page.evaluate(() => {
+            // Facebook renders post images inside these containers
             const selectors = [
+                // Standard post photo
                 '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
                 '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
+                // Fallback: any large fbcdn image in the feed
                 'img[src*="fbcdn"][width]'
             ];
+
             for (const selector of selectors) {
                 const imgs = Array.from(document.querySelectorAll(selector));
+                // Filter out tiny icons, avatars, and UI images
                 const postImg = imgs.find(img => {
                     const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
                     const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                    // Must be a reasonably sized image (not an icon/avatar)
                     return w > 200 && h > 200;
                 });
                 if (postImg) return postImg.src;
@@ -103,32 +85,23 @@ async function getLatestFacebookImage() {
             return;
         }
 
-        const targetFilename = getFilename(imageUrl);
-        process.stderr.write(`DOM identified: ${targetFilename}\n`);
+        process.stderr.write(`Found Facebook image: ${imageUrl}\n`);
 
-        // Look up the intercepted buffer for this exact filename.
-        // This avoids re-fetching the URL (which would 403 without the session)
-        // and gives us the largest version Facebook already loaded.
-        const buffer = capturedImages[targetFilename];
+        // Download the image
+        const response = await page.goto(imageUrl, {
+            waitUntil: 'networkidle0',
+            timeout: 15000
+        });
 
-        if (!buffer) {
-            process.stderr.write(`No intercepted bytes for ${targetFilename} — falling back to direct download.\n`);
-            // Last resort: direct download with original URL (will be low-res but works)
-            const response = await page.goto(imageUrl, { waitUntil: 'networkidle0', timeout: 15000 });
-            if (response && response.ok()) {
-                const fallbackBuffer = await response.buffer();
-                fs.writeFileSync(OUTPUT_FILE, fallbackBuffer);
-                process.stderr.write(`Saved via direct download (${fallbackBuffer.length} bytes)\n`);
-                console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
-            } else {
-                console.log(JSON.stringify({ error: 'download_failed' }));
-            }
-            return;
+        if (response && response.ok()) {
+            const buffer = await response.buffer();
+            fs.writeFileSync(OUTPUT_FILE, buffer);
+            process.stderr.write(`Saved Facebook image to ${OUTPUT_FILE}\n`);
+            console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
+        } else {
+            process.stderr.write(`Failed to download image (status: ${response?.status()})\n`);
+            console.log(JSON.stringify({ error: 'download_failed' }));
         }
-
-        process.stderr.write(`Saving intercepted image: ${targetFilename} (${buffer.length} bytes)\n`);
-        fs.writeFileSync(OUTPUT_FILE, buffer);
-        console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
 
     } catch (error) {
         process.stderr.write(`Facebook scraper error: ${error.message}\n`);
