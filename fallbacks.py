@@ -67,7 +67,7 @@ SERVANTS_MAP = {
     "hassan of the shining star": {"img": "Hassan of the Shining Star.jpg", "alt": "Hassan of the Shining Star Pickup Summon"},
     "jeanne d'arc (alter)": {"img": "Jeanne d'Arc (Alter).jpg", "alt": "Jeanne d'Arc (Alter) Pickup Summon"},
     "j'eanne d'arc (alter)": {"img": "Jeanne d'Arc (Alter).jpg", "alt": "Jeanne d'Arc (Alter) Pickup Summon"},  # typo variant in source posts
-    "salieri": {"img": "Salieri.jpg", "alt": "Antonio Salieri Pickup Summon"},
+    "salieri": {"img": "Antonio Salieri.jpg", "alt": "Antonio Salieri Pickup Summon"},
     "taira no kagekiyo": {"img": "Taira-no-Kagekiyo.jpg", "alt": "Taira-no-Kagekiyo Pickup Summon"},
     "taira-no-kagekiyo": {"img": "Taira-no-Kagekiyo.jpg", "alt": "Taira-no-Kagekiyo Pickup Summon"},  # hyphen variant
     "marie antoinette": {"img": "Marie Antoinette.jpg", "alt": "Marie Antoinette Pickup Summon"},
