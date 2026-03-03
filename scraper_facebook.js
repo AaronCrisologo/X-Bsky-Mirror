@@ -38,9 +38,10 @@ async function getLatestFacebookImage() {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
 
-        // Intercept all t39.30808 images, store keyed by filename, track capture order
-        const capturedImages = {};
-        const captureOrder = [];
+        // Intercept all fbcdn image responses and store by filename.
+        // We keep the largest buffer seen per filename (Facebook often loads
+        // a small thumbnail first, then a larger version — we want the largest).
+        const capturedImages = {}; // filename → largest buffer seen
 
         page.on('response', async (response) => {
             try {
@@ -48,7 +49,6 @@ async function getLatestFacebookImage() {
                 const url = response.url();
                 if (!url.includes('fbcdn.net')) return;
                 if (url.includes('rsrc.php')) return;
-                if (!url.includes('t39.30808')) return;
                 const ct = response.headers()['content-type'] || '';
                 if (!ct.startsWith('image/')) return;
 
@@ -56,22 +56,15 @@ async function getLatestFacebookImage() {
                 if (!filename) return;
 
                 const buffer = await response.buffer();
-                if (buffer.length < 1000) return;
-
-                if (!capturedImages[filename]) {
-                    captureOrder.push(filename);
-                    capturedImages[filename] = { buffer, url };
-                } else if (buffer.length > capturedImages[filename].buffer.length) {
-                    capturedImages[filename] = { buffer, url };
+                if (!capturedImages[filename] || buffer.length > capturedImages[filename].length) {
+                    capturedImages[filename] = buffer;
                 }
-
-                process.stderr.write(`Stored ${filename} (${buffer.length} bytes)\n`);
             } catch (_) {}
         });
 
         await page.goto(FB_PAGE_URL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // Dismiss popups
+        // Dismiss cookie/login popups
         try {
             const declineBtn = await page.$('[data-cookiebanner="accept_only_essential_button"]');
             if (declineBtn) await declineBtn.click();
@@ -82,86 +75,59 @@ async function getLatestFacebookImage() {
         } catch (_) {}
 
         await new Promise(r => setTimeout(r, 2000));
-        await page.evaluate(() => window.scrollBy(0, 500));
-        await new Promise(r => setTimeout(r, 3000));
+        await page.evaluate(() => window.scrollBy(0, 400));
+        await new Promise(r => setTimeout(r, 2000));
 
-        // Step 1: Find the cover photo filename so we can exclude it.
-        // The cover/banner image sits in the page header, above the feed.
-        // We grab it first so we know what to skip.
-        const coverPhotoFilename = await page.evaluate(() => {
-            const coverSelectors = [
-                '[data-pagelet="ProfileCoverPhoto"] img',
-                '[data-pagelet="ProfileTilesFeed_0"] img',
-                // Cover photo is always the first very-wide image near the top of the page
-                // Walk all imgs sorted by vertical position, find the topmost large one
+        // Original working DOM selector — unchanged from first implementation
+        const imageUrl = await page.evaluate(() => {
+            const selectors = [
+                '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
+                '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
+                'img[src*="fbcdn"][width]'
             ];
-
-            for (const sel of coverSelectors) {
-                const img = document.querySelector(sel);
-                if (img && img.src) return img.src;
-            }
-
-            // Fallback: topmost large fbcdn image on the page is the cover photo
-            const allImgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-            allImgs.sort((a, b) => {
-                const aTop = a.getBoundingClientRect().top + window.scrollY;
-                const bTop = b.getBoundingClientRect().top + window.scrollY;
-                return aTop - bTop;
-            });
-            const topImg = allImgs.find(img => {
-                const w = img.naturalWidth || 0;
-                const h = img.naturalHeight || 0;
-                return w > 300;
-            });
-            return topImg ? topImg.src : null;
-        });
-
-        const coverFilename = coverPhotoFilename ? getFilename(coverPhotoFilename) : null;
-        process.stderr.write(`Cover photo filename to exclude: ${coverFilename}\n`);
-
-        // Step 2: Also find profile picture filename to exclude
-        const profilePicFilename = await page.evaluate(() => {
-            // Profile pictures use _nc_sid=2d3e12 or are in specific containers
-            const profileSelectors = [
-                '[data-pagelet="ProfileActions"] img',
-                'image[data-testid="profilePic"]',
-            ];
-            for (const sel of profileSelectors) {
-                const img = document.querySelector(sel);
-                if (img && img.src) return img.src;
+            for (const selector of selectors) {
+                const imgs = Array.from(document.querySelectorAll(selector));
+                const postImg = imgs.find(img => {
+                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
+                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                    return w > 200 && h > 200;
+                });
+                if (postImg) return postImg.src;
             }
             return null;
         });
-        const profileFilename = profilePicFilename ? getFilename(profilePicFilename) : null;
-        process.stderr.write(`Profile pic filename to exclude: ${profileFilename}\n`);
 
-        // Step 3: From captureOrder, pick the first image that is NOT the cover or profile pic
-        // and is a reasonable size (>5KB = not a tiny icon)
-        const excludeSet = new Set([coverFilename, profileFilename].filter(Boolean));
-
-        let targetFilename = null;
-        for (const filename of captureOrder) {
-            if (excludeSet.has(filename)) {
-                process.stderr.write(`Skipping excluded image: ${filename}\n`);
-                continue;
-            }
-            const entry = capturedImages[filename];
-            if (entry && entry.buffer.length > 5000) {
-                targetFilename = filename;
-                process.stderr.write(`Selected post image: ${targetFilename}\n`);
-                break;
-            }
-        }
-
-        if (!targetFilename) {
-            process.stderr.write('No post image found after exclusions.\n');
+        if (!imageUrl) {
+            process.stderr.write('No suitable post image found on Facebook page.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
 
-        const captured = capturedImages[targetFilename];
-        process.stderr.write(`Saving ${targetFilename} (${captured.buffer.length} bytes)\n`);
-        fs.writeFileSync(OUTPUT_FILE, captured.buffer);
+        const targetFilename = getFilename(imageUrl);
+        process.stderr.write(`DOM identified: ${targetFilename}\n`);
+
+        // Look up the intercepted buffer for this exact filename.
+        // This avoids re-fetching the URL (which would 403 without the session)
+        // and gives us the largest version Facebook already loaded.
+        const buffer = capturedImages[targetFilename];
+
+        if (!buffer) {
+            process.stderr.write(`No intercepted bytes for ${targetFilename} — falling back to direct download.\n`);
+            // Last resort: direct download with original URL (will be low-res but works)
+            const response = await page.goto(imageUrl, { waitUntil: 'networkidle0', timeout: 15000 });
+            if (response && response.ok()) {
+                const fallbackBuffer = await response.buffer();
+                fs.writeFileSync(OUTPUT_FILE, fallbackBuffer);
+                process.stderr.write(`Saved via direct download (${fallbackBuffer.length} bytes)\n`);
+                console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
+            } else {
+                console.log(JSON.stringify({ error: 'download_failed' }));
+            }
+            return;
+        }
+
+        process.stderr.write(`Saving intercepted image: ${targetFilename} (${buffer.length} bytes)\n`);
+        fs.writeFileSync(OUTPUT_FILE, buffer);
         console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
 
     } catch (error) {
