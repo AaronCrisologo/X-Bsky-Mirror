@@ -26,8 +26,6 @@ async function getLatestFacebookImage() {
 
     try {
         await page.setViewport({ width: 1280, height: 1000 });
-
-        // Set a realistic user agent to reduce bot detection
         await page.setUserAgent(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
@@ -36,59 +34,84 @@ async function getLatestFacebookImage() {
 
         // Dismiss cookie/login popups if they appear
         try {
-            // "Decline optional cookies" button
             const declineBtn = await page.$('[data-cookiebanner="accept_only_essential_button"]');
             if (declineBtn) await declineBtn.click();
         } catch (_) {}
-
         try {
-            // Close login modal if present
             const closeBtn = await page.$('[aria-label="Close"]');
             if (closeBtn) await closeBtn.click();
         } catch (_) {}
 
-        // Wait a moment for any overlays to clear
         await new Promise(r => setTimeout(r, 2000));
-
-        // Scroll slightly to trigger lazy loading of post images
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Find the first post image on the page
-        const imageUrl = await page.evaluate(() => {
-            // Facebook renders post images inside these containers
-            const selectors = [
-                // Standard post photo
-                '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
-                '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
-                // Fallback: any large fbcdn image in the feed
-                'img[src*="fbcdn"][width]'
-            ];
-
-            for (const selector of selectors) {
-                const imgs = Array.from(document.querySelectorAll(selector));
-                // Filter out tiny icons, avatars, and UI images
-                const postImg = imgs.find(img => {
-                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                    // Must be a reasonably sized image (not an icon/avatar)
-                    return w > 200 && h > 200;
-                });
-                if (postImg) return postImg.src;
+        // Find the first clickable post image in the feed (not an avatar/icon)
+        const imageClicked = await page.evaluate(() => {
+            const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
+            const postImg = imgs.find(img => {
+                const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
+                const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                return w > 200 && h > 200;
+            });
+            if (!postImg) return false;
+            // Walk up to find a clickable anchor/div wrapping the image
+            let el = postImg;
+            for (let i = 0; i < 6; i++) {
+                if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
+                    el.click();
+                    return true;
+                }
+                el = el.parentElement;
+                if (!el) break;
             }
-            return null;
+            // Fallback: click the image itself
+            postImg.click();
+            return true;
         });
 
-        if (!imageUrl) {
-            process.stderr.write('No suitable post image found on Facebook page.\n');
+        if (!imageClicked) {
+            process.stderr.write('Could not find a post image to click.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
 
-        process.stderr.write(`Found Facebook image: ${imageUrl}\n`);
+        process.stderr.write('Clicked post image, waiting for photo viewer...\n');
 
-        // Download the image
-        const response = await page.goto(imageUrl, {
+        // Wait for the photo viewer / lightbox to open
+        // Facebook may navigate to a /photo/ URL, or open a modal in-place
+        try {
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        } catch (_) {
+            // Modal-style viewer — no navigation, keep going
+        }
+
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Grab the largest fbcdn image now visible — this is the full-res viewer image
+        const highResUrl = await page.evaluate(() => {
+            const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
+            // Sort by pixel area descending
+            imgs.sort((a, b) => {
+                const areaA = (a.naturalWidth || 0) * (a.naturalHeight || 0);
+                const areaB = (b.naturalWidth || 0) * (b.naturalHeight || 0);
+                return areaB - areaA;
+            });
+            // Pick the largest image — should be the full-res photo in the viewer
+            const best = imgs.find(img => (img.naturalWidth || 0) > 400);
+            return best ? best.src : null;
+        });
+
+        if (!highResUrl) {
+            process.stderr.write('Could not find high-res image in photo viewer.\n');
+            console.log(JSON.stringify({ error: 'no_highres_image' }));
+            return;
+        }
+
+        process.stderr.write(`Found high-res Facebook image: ${highResUrl}\n`);
+
+        // Download it
+        const response = await page.goto(highResUrl, {
             waitUntil: 'networkidle0',
             timeout: 15000
         });
@@ -96,7 +119,7 @@ async function getLatestFacebookImage() {
         if (response && response.ok()) {
             const buffer = await response.buffer();
             fs.writeFileSync(OUTPUT_FILE, buffer);
-            process.stderr.write(`Saved Facebook image to ${OUTPUT_FILE}\n`);
+            process.stderr.write(`Saved high-res Facebook image to ${OUTPUT_FILE}\n`);
             console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
         } else {
             process.stderr.write(`Failed to download image (status: ${response?.status()})\n`);
