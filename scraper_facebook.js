@@ -24,11 +24,10 @@ function getFilename(url) {
 }
 
 async function getLatestFacebookImage() {
-     // Warn if cookies are missing — scraper will still work but images will be low-res
     if (!process.env.FB_C_USER || !process.env.FB_XS) {
         process.stderr.write('⚠️  FB_C_USER or FB_XS not set — running without session cookies (low-res fallback).\n');
     }
-    
+
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
@@ -50,8 +49,9 @@ async function getLatestFacebookImage() {
 
         await page.setCookie(...rawCookies);
 
-        // Phase 1: capture all feed-load images keyed by filename (for fallback)
+        // Phase 1: capture all feed-load images keyed by filename
         const capturedImages = {};
+        const captureOrder = []; // first-seen insertion order
 
         page.on('response', async (response) => {
             try {
@@ -64,6 +64,9 @@ async function getLatestFacebookImage() {
                 const filename = getFilename(url);
                 if (!filename) return;
                 const buffer = await response.buffer();
+                if (!capturedImages[filename]) {
+                    captureOrder.push(filename); // track first-seen order
+                }
                 if (!capturedImages[filename] || buffer.length > capturedImages[filename].length) {
                     capturedImages[filename] = buffer;
                     process.stderr.write(`Captured ${filename} (${buffer.length} bytes)\n`);
@@ -84,48 +87,9 @@ async function getLatestFacebookImage() {
 
         await new Promise(r => setTimeout(r, 2000));
         await page.evaluate(() => window.scrollBy(0, 400));
-        
-        // Wait until at least one article has a real loaded fbcdn image (not SVG/placeholder)
-        try {
-            await page.waitForFunction(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                return articles.some(a =>
-                    Array.from(a.querySelectorAll('img')).some(img =>
-                        img.src && img.src.includes('fbcdn.net') && !img.src.startsWith('data:')
-                    )
-                );
-            }, { timeout: 15000 });
-        } catch (_) {
-            process.stderr.write('Timeout waiting for article images to load\n');
-        }
-        
-        await new Promise(r => setTimeout(r, 1000)); // small buffer after images appear
+        await new Promise(r => setTimeout(r, 2000));
 
-        // TEMPORARY DEBUG
-        const debugInfo = await page.evaluate(() => {
-            const articles = Array.from(document.querySelectorAll('[role="article"]'));
-            
-            return {
-                totalArticles: articles.length,
-                articleDetails: articles.map((a, i) => {
-                    const allImgs = Array.from(a.querySelectorAll('img'));
-                    return {
-                        index: i,
-                        imgCount: allImgs.length,
-                        srcs: allImgs.map(img => ({
-                            src: img.src ? img.src.substring(0, 80) : '',
-                            dataSrc: img.getAttribute('data-src') ? img.getAttribute('data-src').substring(0, 80) : '',
-                            lazy: img.getAttribute('loading'),
-                        })),
-                        hasVideo: !!a.querySelector('video, a[href*="/videos/"], a[href*="/reel/"]'),
-                        outerHTMLSnippet: a.innerHTML.substring(0, 300)
-                    };
-                })
-            };
-        });
-        process.stderr.write(`DEBUG Articles: ${JSON.stringify(debugInfo, null, 2)}\n`);
-        
-        // Phase 2: DOM identifies the correct post image element
+        // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
@@ -134,22 +98,9 @@ async function getLatestFacebookImage() {
                 latestPost = document.querySelector(`[data-pagelet="${name}"]`);
                 if (latestPost) break;
             }
-        
-            // Final fallback: first role=article that contains an fbcdn image
-            if (!latestPost) {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                latestPost = articles.find(a => a.querySelector('img[src*="fbcdn"]')) || null;
-            }
-        
-            if (!latestPost) {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                latestPost = articles.find(a =>
-                    Array.from(a.querySelectorAll('img')).some(img =>
-                        img.src && img.src.includes('fbcdn.net') && !img.src.startsWith('data:')
-                    )
-                ) || null;
-            }
-        
+
+            if (!latestPost) return null; // signal to use network fallback
+
             const hasVideo =
                 latestPost.querySelector('video') !== null ||
                 latestPost.querySelector('[data-video-id]') !== null ||
@@ -158,13 +109,12 @@ async function getLatestFacebookImage() {
                 latestPost.querySelector('[data-sigil="inlineVideo"]') !== null ||
                 latestPost.querySelector('a[href*="/videos/"]') !== null ||
                 latestPost.querySelector('a[href*="/reel/"]') !== null;
-        
+
             if (hasVideo) return { isVideo: true };
-        
+
             const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
             if (!imgs.length) return null;
-        
-            // Collect ALL fbcdn imgs — don't require a /photo link
+
             const candidates = imgs.map(img => {
                 let photoHref = null;
                 let el = img;
@@ -183,57 +133,68 @@ async function getLatestFacebookImage() {
                 }
                 return { src: img.src, photoHref };
             });
-            
-            // Filter out known non-post images (profile pics, icons) by src patterns
+
             const filtered = candidates.filter(c =>
-                !c.src.includes('_s.jpg') &&   // small/square profile crops
+                !c.src.includes('_s.jpg') &&
                 !c.src.includes('p40x40') &&
                 !c.src.includes('p50x50') &&
                 !c.src.includes('p60x60')
             );
-            
+
             return { candidates: filtered.length ? filtered : candidates };
         });
-        
-        if (!postImageInfo) {
-            process.stderr.write('No photo-linked images found on Facebook page.\n');
-            console.log(JSON.stringify({ error: 'no_image_found' }));
-            return;
-        }
 
-        // Add this check right after:
-        if (postImageInfo.isVideo) {
+        if (postImageInfo && postImageInfo.isVideo) {
             process.stderr.write('Latest post is a video. Skipping.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
-        
-        if (!postImageInfo.candidates || postImageInfo.candidates.length === 0) {
-            process.stderr.write('No photo-linked images found on Facebook page.\n');
-            console.log(JSON.stringify({ error: 'no_image_found' }));
-            return;
-        }
-        
-        // The first candidate in DOM order belongs to the latest post
-        const firstCandidate = postImageInfo.candidates[0];
-        process.stderr.write(`First post candidate: ${getFilename(firstCandidate.src)}\n`);
-        
-        const buf = capturedImages[getFilename(firstCandidate.src)];
-        const size = buf ? buf.length : 0;
-        
-        if (size < 10000) {
-            process.stderr.write(`Image too small (${size} bytes), likely not a post image.\n`);
-            console.log(JSON.stringify({ error: 'no_image_found' }));
-            return;
-        }
-        
-        const targetFilename = getFilename(firstCandidate.src);
-        const postImageInfo_resolved = { src: firstCandidate.src, photoHref: firstCandidate.photoHref };
-        process.stderr.write(`Selected post image: ${targetFilename} (${size} bytes)\n`);
 
-        // Phase 3: click through to the photo viewer to get the full-res image
-        // We set up a NEW response listener that only triggers after the click,
-        // so we catch exactly the full-res image Facebook loads in the viewer.
+        let targetFilename = null;
+        let postImageInfo_resolved = null;
+
+        if (postImageInfo && postImageInfo.candidates && postImageInfo.candidates.length > 0) {
+            // Pagelet path: pick largest captured buffer among DOM candidates
+            let bestSrc = null, bestPhotoHref = null, bestSize = 0;
+            for (const { src, photoHref } of postImageInfo.candidates) {
+                const filename = getFilename(src);
+                const size = capturedImages[filename] ? capturedImages[filename].length : 0;
+                if (size > bestSize) {
+                    bestSize = size;
+                    bestSrc = src;
+                    bestPhotoHref = photoHref;
+                }
+            }
+            if (bestSrc && bestSize >= 10000) {
+                targetFilename = getFilename(bestSrc);
+                postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
+                process.stderr.write(`Pagelet selected: ${targetFilename} (${bestSize} bytes)\n`);
+            }
+        }
+
+        if (!postImageInfo_resolved) {
+            // Network capture fallback: first captured image over 10KB in arrival order
+            process.stderr.write('No pagelet found — using network capture fallback.\n');
+            const candidate = captureOrder.find(filename => {
+                const size = capturedImages[filename] ? capturedImages[filename].length : 0;
+                if (size < 10000) return false;
+                if (filename.endsWith('.kf')) return false;
+                if (filename.endsWith('.png') && capturedImages[filename].length < 50000) return false;
+                return true;
+            });
+
+            if (!candidate) {
+                process.stderr.write('No suitable post image found on Facebook page.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+
+            targetFilename = candidate;
+            postImageInfo_resolved = { src: null, photoHref: null };
+            process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)\n`);
+        }
+
+        // Phase 3: navigate to photo viewer for full-res, if we have a link
         let fullResBuffer = null;
         let fullResBytes = 0;
 
@@ -245,11 +206,8 @@ async function getLatestFacebookImage() {
                 if (url.includes('rsrc.php')) return;
                 const ct = response.headers()['content-type'] || '';
                 if (!ct.startsWith('image/')) return;
-
                 const filename = getFilename(url);
-                // Only care about the specific image we identified
                 if (filename !== targetFilename) return;
-
                 const buffer = await response.buffer();
                 if (buffer.length > fullResBytes) {
                     fullResBuffer = buffer;
@@ -261,18 +219,15 @@ async function getLatestFacebookImage() {
 
         page.on('response', fullResListener);
 
-        // Navigate to the photo viewer — if we found a /photo link use it directly,
-        // otherwise click the image itself
         if (postImageInfo_resolved.photoHref) {
             process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
             await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
-        } else {
+        } else if (postImageInfo_resolved.src) {
             process.stderr.write('Clicking post image to open viewer...\n');
             await page.evaluate((targetSrc) => {
                 const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
                 const img = imgs.find(i => i.src === targetSrc);
                 if (img) {
-                    // Try clicking the wrapping element
                     let el = img;
                     for (let i = 0; i < 8; i++) {
                         if (!el) break;
@@ -291,6 +246,8 @@ async function getLatestFacebookImage() {
             } catch (_) {
                 // Modal viewer — no navigation event
             }
+        } else {
+            process.stderr.write('No photo href available, using feed capture directly.\n');
         }
 
         // Give the viewer time to fully load the high-res image
