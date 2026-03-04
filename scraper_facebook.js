@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
+const FB_PAGE_URL = 'https://www.facebook.com/ZZZ.Official.EN';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -24,6 +24,11 @@ function getFilename(url) {
 }
 
 async function getLatestFacebookImage() {
+     // Warn if cookies are missing — scraper will still work but images will be low-res
+    if (!process.env.FB_C_USER || !process.env.FB_XS) {
+        process.stderr.write('⚠️  FB_C_USER or FB_XS not set — running without session cookies (low-res fallback).\n');
+    }
+    
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
@@ -81,51 +86,132 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
+        // TEMPORARY DEBUG
+        const debugInfo = await page.evaluate(() => {
+            const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
+            let foundPagelet = null;
+            for (const name of pageletNames) {
+                const el = document.querySelector(`[data-pagelet="${name}"]`);
+                if (el) { foundPagelet = name; break; }
+            }
+        
+            const articles = Array.from(document.querySelectorAll('[role="article"]'));
+            const articlesWithImages = articles.filter(a => a.querySelector('img[src*="fbcdn"]'));
+        
+            const allFeedPagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
+                .map(el => el.getAttribute('data-pagelet'))
+                .filter(p => p.toLowerCase().includes('feed') || p.toLowerCase().includes('unit'));
+        
+            return {
+                foundPagelet,
+                allFeedPagelets,
+                totalArticles: articles.length,
+                articlesWithFbcdnImages: articlesWithImages.length,
+                firstArticleImgSrcs: articlesWithImages[0]
+                    ? Array.from(articlesWithImages[0].querySelectorAll('img[src*="fbcdn"]')).map(i => i.src)
+                    : []
+            };
+        });
+        process.stderr.write(`DEBUG Phase2: ${JSON.stringify(debugInfo, null, 2)}\n`);
+        
         // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
-            const selectors = [
-                '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
-                '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
-                'img[src*="fbcdn"][width]'
-            ];
-            for (const selector of selectors) {
-                const imgs = Array.from(document.querySelectorAll(selector));
-                const postImg = imgs.find(img => {
-                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                    return w > 200 && h > 200;
-                });
-                if (postImg) {
-                    // Walk up to find a clickable link wrapping the image
-                    let clickTarget = postImg;
-                    let el = postImg;
-                    for (let i = 0; i < 8; i++) {
-                        if (!el) break;
-                        if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
-                            clickTarget = el;
-                            break;
-                        }
-                        el = el.parentElement;
-                    }
-                    return {
-                        src: postImg.src,
-                        // Return a CSS path we can use to click the element outside evaluate()
-                        isLink: clickTarget !== postImg,
-                        photoHref: clickTarget !== postImg ? clickTarget.href : null
-                    };
-                }
+            // Try known pagelet names in order of preference
+            const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
+            let latestPost = null;
+            for (const name of pageletNames) {
+                latestPost = document.querySelector(`[data-pagelet="${name}"]`);
+                if (latestPost) break;
             }
-            return null;
+        
+            // Final fallback: first role=article that contains an fbcdn image
+            if (!latestPost) {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                latestPost = articles.find(a => a.querySelector('img[src*="fbcdn"]')) || null;
+            }
+        
+            if (!latestPost) return null;
+        
+            const hasVideo =
+                latestPost.querySelector('video') !== null ||
+                latestPost.querySelector('[data-video-id]') !== null ||
+                latestPost.querySelector('[aria-label="Play video"]') !== null ||
+                latestPost.querySelector('[aria-label="Play"]') !== null ||
+                latestPost.querySelector('[data-sigil="inlineVideo"]') !== null ||
+                latestPost.querySelector('a[href*="/videos/"]') !== null ||
+                latestPost.querySelector('a[href*="/reel/"]') !== null;
+        
+            if (hasVideo) return { isVideo: true };
+        
+            const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
+            if (!imgs.length) return null;
+        
+            // Collect ALL fbcdn imgs — don't require a /photo link
+            const candidates = imgs.map(img => {
+                let photoHref = null;
+                let el = img;
+                for (let i = 0; i < 12; i++) {
+                    if (!el) break;
+                    if (el.tagName === 'A' && el.href && (
+                        el.href.includes('/photo') ||
+                        el.href.includes('/posts/') ||
+                        el.href.includes('story_fbid') ||
+                        el.href.includes('permalink')
+                    )) {
+                        photoHref = el.href;
+                        break;
+                    }
+                    el = el.parentElement;
+                }
+                return { src: img.src, photoHref };
+            });
+            
+            // Filter out known non-post images (profile pics, icons) by src patterns
+            const filtered = candidates.filter(c =>
+                !c.src.includes('_s.jpg') &&   // small/square profile crops
+                !c.src.includes('p40x40') &&
+                !c.src.includes('p50x50') &&
+                !c.src.includes('p60x60')
+            );
+            
+            return { candidates: filtered.length ? filtered : candidates };
         });
-
+        
         if (!postImageInfo) {
-            process.stderr.write('No suitable post image found on Facebook page.\n');
+            process.stderr.write('No photo-linked images found on Facebook page.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
 
-        const targetFilename = getFilename(postImageInfo.src);
-        process.stderr.write(`DOM identified post image: ${targetFilename}\n`);
+        // Add this check right after:
+        if (postImageInfo.isVideo) {
+            process.stderr.write('Latest post is a video. Skipping.\n');
+            console.log(JSON.stringify({ error: 'no_image_found' }));
+            return;
+        }
+        
+        if (!postImageInfo.candidates || postImageInfo.candidates.length === 0) {
+            process.stderr.write('No photo-linked images found on Facebook page.\n');
+            console.log(JSON.stringify({ error: 'no_image_found' }));
+            return;
+        }
+        
+        // The first candidate in DOM order belongs to the latest post
+        const firstCandidate = postImageInfo.candidates[0];
+        process.stderr.write(`First post candidate: ${getFilename(firstCandidate.src)}\n`);
+        
+        const buf = capturedImages[getFilename(firstCandidate.src)];
+        const size = buf ? buf.length : 0;
+        
+        if (size < 10000) {
+            process.stderr.write(`Image too small (${size} bytes), likely not a post image.\n`);
+            console.log(JSON.stringify({ error: 'no_image_found' }));
+            return;
+        }
+        
+        const targetFilename = getFilename(firstCandidate.src);
+        const postImageInfo_resolved = { src: firstCandidate.src, photoHref: firstCandidate.photoHref };
+        process.stderr.write(`Selected post image: ${targetFilename} (${size} bytes)\n`);
 
         // Phase 3: click through to the photo viewer to get the full-res image
         // We set up a NEW response listener that only triggers after the click,
@@ -159,9 +245,9 @@ async function getLatestFacebookImage() {
 
         // Navigate to the photo viewer — if we found a /photo link use it directly,
         // otherwise click the image itself
-        if (postImageInfo.photoHref) {
-            process.stderr.write(`Navigating to photo viewer: ${postImageInfo.photoHref}\n`);
-            await page.goto(postImageInfo.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
+        if (postImageInfo_resolved.photoHref) {
+            process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
+            await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
         } else {
             process.stderr.write('Clicking post image to open viewer...\n');
             await page.evaluate((targetSrc) => {
@@ -180,7 +266,7 @@ async function getLatestFacebookImage() {
                     }
                     img.click();
                 }
-            }, postImageInfo.src);
+            }, postImageInfo_resolved.src);
 
             try {
                 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
