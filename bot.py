@@ -156,7 +156,7 @@ def is_already_posted(client, new_text):
 
 
 # === CONFIGURATION ===
-SIMULATION_MODE = False  # Set to True to test without running X scraper
+SIMULATION_MODE = True  # Set to True to test without running X scraper
 
 def main():
     client = Client()
@@ -173,7 +173,7 @@ def main():
         print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
         
         tweet_data = {
-            'text': """Testing:
+            'text': """This is a test:
             ★5 (SSR) Andromeda
             "I am totally a god...Revere me. Fear me, and make sure you don't overwork me...me...me...(Echo)"
             fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0204_sf_pu2%2F
