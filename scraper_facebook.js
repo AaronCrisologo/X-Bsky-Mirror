@@ -109,9 +109,8 @@ async function getLatestFacebookImage() {
         });
         process.stderr.write(`DEBUG FeedUnit_0: ${JSON.stringify(debugInfo, null, 2)}\n`);
         
-        // Phase 2: find the best post image without relying on data-pagelet
+        // Phase 2: find post images without relying on data-pagelet
         const postImageInfo = await page.evaluate(() => {
-            // Find all fbcdn imgs that sit inside a /photo link — these are post images, not avatars/icons
             const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
         
             const candidates = [];
@@ -124,22 +123,18 @@ async function getLatestFacebookImage() {
                     if (!photoHref && el.tagName === 'A' && el.href && el.href.includes('/photo')) {
                         photoHref = el.href;
                     }
-                    // Look for a post-level container (role=article or common feed wrappers)
                     if (!postContainer && (
                         el.getAttribute('role') === 'article' ||
-                        el.getAttribute('data-testid') === 'post_message' ||
-                        (el.tagName === 'DIV' && el.getAttribute('aria-posinset') !== null)
+                        el.getAttribute('aria-posinset') !== null
                     )) {
                         postContainer = el;
                     }
                     el = el.parentElement;
                 }
         
-                // Only include images that have a /photo link parent
                 if (!photoHref) continue;
         
-                // Check the post container (or nearest ancestors) for video signals
-                const searchRoot = postContainer || img.closest('div[role="feed"] > div') || img.parentElement;
+                const searchRoot = postContainer || img.parentElement;
                 const hasVideo = searchRoot && (
                     searchRoot.querySelector('video') !== null ||
                     searchRoot.querySelector('[data-video-id]') !== null ||
@@ -160,33 +155,29 @@ async function getLatestFacebookImage() {
             return;
         }
         
-        // Pick the largest captured image among candidates that aren't in a video post
-        let bestSrc = null;
-        let bestPhotoHref = null;
-        let bestSize = 0;
+        // The first candidate in DOM order belongs to the latest post
+        const firstCandidate = postImageInfo[0];
         
-        for (const { src, photoHref, hasVideo } of postImageInfo) {
-            if (hasVideo) continue;
-            const filename = getFilename(src);
-            const buf = capturedImages[filename];
-            const size = buf ? buf.length : 0;
-            process.stderr.write(`Candidate: ${filename} (${size} bytes, video=${hasVideo})\n`);
-            if (size > bestSize) {
-                bestSize = size;
-                bestSrc = src;
-                bestPhotoHref = photoHref;
-            }
-        }
+        process.stderr.write(`First post candidate: ${getFilename(firstCandidate.src)} (video=${firstCandidate.hasVideo})\n`);
         
-        if (!bestSrc || bestSize < 10000) {
-            process.stderr.write('No suitable post image found (all posts may be videos or images too small).\n');
+        if (firstCandidate.hasVideo) {
+            process.stderr.write('Latest post is a video. Skipping.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
         
-        const targetFilename = getFilename(bestSrc);
-        const postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
-        process.stderr.write(`Selected post image: ${targetFilename} (${bestSize} bytes)\n`);
+        const buf = capturedImages[getFilename(firstCandidate.src)];
+        const size = buf ? buf.length : 0;
+        
+        if (size < 10000) {
+            process.stderr.write(`Image too small (${size} bytes), likely not a post image.\n`);
+            console.log(JSON.stringify({ error: 'no_image_found' }));
+            return;
+        }
+        
+        const targetFilename = getFilename(firstCandidate.src);
+        const postImageInfo_resolved = { src: firstCandidate.src, photoHref: firstCandidate.photoHref };
+        process.stderr.write(`Selected post image: ${targetFilename} (${size} bytes)\n`);
 
         // Phase 3: click through to the photo viewer to get the full-res image
         // We set up a NEW response listener that only triggers after the click,
