@@ -85,44 +85,54 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Phase 2: Find the first post container and check if it has a qualifying image.
-        // Facebook sometimes numbers FeedUnit containers starting from 0, 1, or higher.
-        // We collect all FeedUnit containers, sort by number, and check the lowest one.
-        // If the first post has no qualifying image, it is a video/reel — signal fallback.
+        // Phase 2: Find the topmost post on the page and check if it has a qualifying image.
+        // If the latest post is a video/reel it will have no qualifying image — signal fallback.
+        // We try multiple strategies to find the first post container, sorted by vertical position.
         const latestPostCheck = await page.evaluate(() => {
+            // Strategy 1: FeedUnit pagelet containers (sorted by number)
             const allFeedUnits = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
-
-            let firstPost = null;
             if (allFeedUnits.length > 0) {
                 allFeedUnits.sort((a, b) => {
                     const aNum = parseInt((a.getAttribute('data-pagelet') || '').replace('FeedUnit_', '') || '999');
                     const bNum = parseInt((b.getAttribute('data-pagelet') || '').replace('FeedUnit_', '') || '999');
                     return aNum - bNum;
                 });
-                firstPost = allFeedUnits[0];
-            } else {
-                firstPost = document.querySelector('[role="feed"] article') ||
-                            document.querySelector('article');
+                const firstPost = allFeedUnits[0];
+                const pagelet = firstPost.getAttribute('data-pagelet');
+                const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
+                const postImg = imgs.find(img => {
+                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
+                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                    return w > 200 && h > 200;
+                });
+                return { postFound: true, hasImage: !!postImg, pagelet };
             }
 
-            if (!firstPost) {
-                return { postFound: false, hasImage: false, pagelet: 'none' };
+            // Strategy 2: role="article" elements — pick the topmost by vertical position
+            const articles = Array.from(document.querySelectorAll('[role="article"]'));
+            if (articles.length > 0) {
+                // Filter out nested articles (e.g. shared post previews inside a post)
+                const topLevel = articles.filter(a => !articles.some(b => b !== a && b.contains(a)));
+                topLevel.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                const firstPost = topLevel[0];
+                const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
+                const postImg = imgs.find(img => {
+                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
+                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                    return w > 200 && h > 200;
+                });
+                return { postFound: true, hasImage: !!postImg, pagelet: 'role=article' };
             }
 
-            const pagelet = firstPost.getAttribute('data-pagelet') || 'article';
-            const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
-            const postImg = imgs.find(img => {
-                const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                return w > 200 && h > 200;
-            });
-
-            return { postFound: true, hasImage: !!postImg, pagelet };
+            return { postFound: false, hasImage: false, pagelet: 'none' };
         });
 
         process.stderr.write(`First post container: "${latestPostCheck.pagelet}", has image: ${latestPostCheck.hasImage}\n`);
 
-        if (latestPostCheck.postFound && !latestPostCheck.hasImage) {
+        // Trigger fallback if:
+        //  - we found a post container but it has no image (video/reel), OR
+        //  - we found no container at all (can't determine post type — safe to fallback)
+        if (!latestPostCheck.hasImage) {
             process.stderr.write('Latest Facebook post has no image (likely a video/reel) — using local fallback.\n');
             console.log(JSON.stringify({ error: 'latest_post_is_video' }));
             return;
@@ -230,12 +240,13 @@ async function getLatestFacebookImage() {
 
         const feedBuffer = capturedImages[targetFilename];
 
-        if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
-            process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
-            fs.writeFileSync(OUTPUT_FILE, fullResBuffer);
-        } else if (feedBuffer) {
-            process.stderr.write(`Viewer didn't load higher res, using feed capture: ${feedBuffer.length} bytes\n`);
-            fs.writeFileSync(OUTPUT_FILE, feedBuffer);
+        const bestBuffer = (fullResBuffer && fullResBuffer.length >= (feedBuffer ? feedBuffer.length : 0)) ? fullResBuffer : feedBuffer;
+        const bestBytes = bestBuffer ? bestBuffer.length : 0;
+        const source = (fullResBuffer && fullResBuffer.length >= (feedBuffer ? feedBuffer.length : 0)) ? 'viewer' : 'feed capture';
+
+        if (bestBuffer) {
+            process.stderr.write(`Saving image (, ${bestBytes} bytes)\n`);
+            fs.writeFileSync(OUTPUT_FILE, bestBuffer);
         } else {
             process.stderr.write('No image buffer available.\n');
             console.log(JSON.stringify({ error: 'download_failed' }));
