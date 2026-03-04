@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
+const FB_PAGE_URL = 'https://www.facebook.com/ZZZ.Official.EN';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -191,24 +191,16 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Check if the latest post is a video — search broadly since article elements are often empty
+            // Check if the latest post is a video — only use signals that appear on actual video posts
             const fallbackVideoCheck = await page.evaluate(() => {
-                // Check anywhere on the page for video signals that appear before any post image
+                // These signals only appear when a video post is rendered, not in nav/sidebar
                 const videoSignals = [
                     'video',
                     '[data-video-id]',
                     '[aria-label="Play video"]',
-                    '[aria-label="Play"]',
                     '[data-sigil="inlineVideo"]',
                 ];
-                for (const sel of videoSignals) {
-                    if (document.querySelector(sel)) return true;
-                }
-                // Check all links — if the first post-style link is a /videos/ or /reel/ link, it's a video post
-                const postLinks = Array.from(document.querySelectorAll('a[href*="/videos/"], a[href*="/reel/"]'));
-                // Filter out nav/sidebar links by checking they're not in the header
-                const header = document.querySelector('header, [role="banner"]');
-                return postLinks.some(a => !header || !header.contains(a));
+                return videoSignals.some(sel => document.querySelector(sel) !== null);
             });
 
             if (fallbackVideoCheck) {
