@@ -85,30 +85,44 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Phase 2: Check the latest post (FeedUnit_0) specifically.
-        // We check two things:
-        //   A) Does FeedUnit_0 exist at all?
-        //   B) Does FeedUnit_0 contain a qualifying post image?
-        // If FeedUnit_0 exists but has NO qualifying image, the latest post is a video
-        // or reel — signal fallback immediately rather than sliding to the next post.
+        // Phase 2: Find the first post container and check if it has a qualifying image.
+        // Facebook sometimes numbers FeedUnit containers starting from 0, 1, or higher.
+        // We collect all FeedUnit containers, sort by number, and check the lowest one.
+        // If the first post has no qualifying image, it is a video/reel — signal fallback.
         const latestPostCheck = await page.evaluate(() => {
-            const firstPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
-            if (!firstPost) {
-                // FeedUnit_0 not found — feed structure may differ, let later logic handle it
-                return { feedUnitFound: false, hasImage: false };
+            const allFeedUnits = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
+
+            let firstPost = null;
+            if (allFeedUnits.length > 0) {
+                allFeedUnits.sort((a, b) => {
+                    const aNum = parseInt((a.getAttribute('data-pagelet') || '').replace('FeedUnit_', '') || '999');
+                    const bNum = parseInt((b.getAttribute('data-pagelet') || '').replace('FeedUnit_', '') || '999');
+                    return aNum - bNum;
+                });
+                firstPost = allFeedUnits[0];
+            } else {
+                firstPost = document.querySelector('[role="feed"] article') ||
+                            document.querySelector('article');
             }
+
+            if (!firstPost) {
+                return { postFound: false, hasImage: false, pagelet: 'none' };
+            }
+
+            const pagelet = firstPost.getAttribute('data-pagelet') || 'article';
             const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
             const postImg = imgs.find(img => {
                 const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
                 const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
                 return w > 200 && h > 200;
             });
-            return { feedUnitFound: true, hasImage: !!postImg };
+
+            return { postFound: true, hasImage: !!postImg, pagelet };
         });
 
-        process.stderr.write(`FeedUnit_0 found: ${latestPostCheck.feedUnitFound}, has image: ${latestPostCheck.hasImage}\n`);
+        process.stderr.write(`First post container: "${latestPostCheck.pagelet}", has image: ${latestPostCheck.hasImage}\n`);
 
-        if (latestPostCheck.feedUnitFound && !latestPostCheck.hasImage) {
+        if (latestPostCheck.postFound && !latestPostCheck.hasImage) {
             process.stderr.write('Latest Facebook post has no image (likely a video/reel) — using local fallback.\n');
             console.log(JSON.stringify({ error: 'latest_post_is_video' }));
             return;
