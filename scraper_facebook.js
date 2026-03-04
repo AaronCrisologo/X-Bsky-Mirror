@@ -84,7 +84,22 @@ async function getLatestFacebookImage() {
 
         await new Promise(r => setTimeout(r, 2000));
         await page.evaluate(() => window.scrollBy(0, 400));
-        await new Promise(r => setTimeout(r, 4000));
+        
+        // Wait until at least one article has a real loaded fbcdn image (not SVG/placeholder)
+        try {
+            await page.waitForFunction(() => {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                return articles.some(a =>
+                    Array.from(a.querySelectorAll('img')).some(img =>
+                        img.src && img.src.includes('fbcdn.net') && !img.src.startsWith('data:')
+                    )
+                );
+            }, { timeout: 15000 });
+        } catch (_) {
+            process.stderr.write('Timeout waiting for article images to load\n');
+        }
+        
+        await new Promise(r => setTimeout(r, 1000)); // small buffer after images appear
 
         // TEMPORARY DEBUG
         const debugInfo = await page.evaluate(() => {
@@ -126,7 +141,14 @@ async function getLatestFacebookImage() {
                 latestPost = articles.find(a => a.querySelector('img[src*="fbcdn"]')) || null;
             }
         
-            if (!latestPost) return null;
+            if (!latestPost) {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                latestPost = articles.find(a =>
+                    Array.from(a.querySelectorAll('img')).some(img =>
+                        img.src && img.src.includes('fbcdn.net') && !img.src.startsWith('data:')
+                    )
+                ) || null;
+            }
         
             const hasVideo =
                 latestPost.querySelector('video') !== null ||
