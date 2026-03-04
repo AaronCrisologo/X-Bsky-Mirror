@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/HonkaiStarRail';
+const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -24,6 +24,11 @@ function getFilename(url) {
 }
 
 async function getLatestFacebookImage() {
+     // Warn if cookies are missing — scraper will still work but images will be low-res
+    if (!process.env.FB_C_USER || !process.env.FB_XS) {
+        process.stderr.write('⚠️  FB_C_USER or FB_XS not set — running without session cookies (low-res fallback).\n');
+    }
+    
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
