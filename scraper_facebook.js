@@ -84,35 +84,31 @@ async function getLatestFacebookImage() {
 
         await new Promise(r => setTimeout(r, 2000));
         await page.evaluate(() => window.scrollBy(0, 400));
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 4000));
 
         // TEMPORARY DEBUG
         const debugInfo = await page.evaluate(() => {
-            const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
-            let foundPagelet = null;
-            for (const name of pageletNames) {
-                const el = document.querySelector(`[data-pagelet="${name}"]`);
-                if (el) { foundPagelet = name; break; }
-            }
-        
             const articles = Array.from(document.querySelectorAll('[role="article"]'));
-            const articlesWithImages = articles.filter(a => a.querySelector('img[src*="fbcdn"]'));
-        
-            const allFeedPagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
-                .map(el => el.getAttribute('data-pagelet'))
-                .filter(p => p.toLowerCase().includes('feed') || p.toLowerCase().includes('unit'));
-        
+            
             return {
-                foundPagelet,
-                allFeedPagelets,
                 totalArticles: articles.length,
-                articlesWithFbcdnImages: articlesWithImages.length,
-                firstArticleImgSrcs: articlesWithImages[0]
-                    ? Array.from(articlesWithImages[0].querySelectorAll('img[src*="fbcdn"]')).map(i => i.src)
-                    : []
+                articleDetails: articles.map((a, i) => {
+                    const allImgs = Array.from(a.querySelectorAll('img'));
+                    return {
+                        index: i,
+                        imgCount: allImgs.length,
+                        srcs: allImgs.map(img => ({
+                            src: img.src ? img.src.substring(0, 80) : '',
+                            dataSrc: img.getAttribute('data-src') ? img.getAttribute('data-src').substring(0, 80) : '',
+                            lazy: img.getAttribute('loading'),
+                        })),
+                        hasVideo: !!a.querySelector('video, a[href*="/videos/"], a[href*="/reel/"]'),
+                        outerHTMLSnippet: a.innerHTML.substring(0, 300)
+                    };
+                })
             };
         });
-        process.stderr.write(`DEBUG Phase2: ${JSON.stringify(debugInfo, null, 2)}\n`);
+        process.stderr.write(`DEBUG Articles: ${JSON.stringify(debugInfo, null, 2)}\n`);
         
         // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
