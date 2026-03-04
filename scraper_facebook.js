@@ -109,67 +109,68 @@ async function getLatestFacebookImage() {
         });
         process.stderr.write(`DEBUG FeedUnit_0: ${JSON.stringify(debugInfo, null, 2)}\n`);
         
-        // Phase 2: DOM identifies the correct post image element
+        // Phase 2: find the best post image without relying on data-pagelet
         const postImageInfo = await page.evaluate(() => {
-            const latestPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
+            // Find all fbcdn imgs that sit inside a /photo link — these are post images, not avatars/icons
+            const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
         
-            if (!latestPost) return null;
-        
-            const hasVideo =
-                latestPost.querySelector('video') !== null ||
-                latestPost.querySelector('[data-video-id]') !== null ||
-                latestPost.querySelector('[aria-label="Play video"]') !== null ||
-                latestPost.querySelector('[aria-label="Play"]') !== null ||
-                latestPost.querySelector('[data-sigil="inlineVideo"]') !== null ||
-                latestPost.querySelector('a[href*="/videos/"]') !== null ||
-                latestPost.querySelector('a[href*="/reel/"]') !== null;
-        
-            if (hasVideo) return { isVideo: true };
-        
-            // Collect ALL fbcdn imgs inside FeedUnit_0 — no dimension filter
-            const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
-            if (!imgs.length) return null;
-        
-            // Return all candidate srcs + photo link; we'll pick the best outside evaluate()
-            const candidates = imgs.map(img => {
+            const candidates = [];
+            for (const img of imgs) {
                 let photoHref = null;
+                let postContainer = null;
                 let el = img;
-                for (let i = 0; i < 8; i++) {
+                for (let i = 0; i < 12; i++) {
                     if (!el) break;
-                    if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
+                    if (!photoHref && el.tagName === 'A' && el.href && el.href.includes('/photo')) {
                         photoHref = el.href;
-                        break;
+                    }
+                    // Look for a post-level container (role=article or common feed wrappers)
+                    if (!postContainer && (
+                        el.getAttribute('role') === 'article' ||
+                        el.getAttribute('data-testid') === 'post_message' ||
+                        (el.tagName === 'DIV' && el.getAttribute('aria-posinset') !== null)
+                    )) {
+                        postContainer = el;
                     }
                     el = el.parentElement;
                 }
-                return { src: img.src, photoHref };
-            });
         
-            return { candidates };
+                // Only include images that have a /photo link parent
+                if (!photoHref) continue;
+        
+                // Check the post container (or nearest ancestors) for video signals
+                const searchRoot = postContainer || img.closest('div[role="feed"] > div') || img.parentElement;
+                const hasVideo = searchRoot && (
+                    searchRoot.querySelector('video') !== null ||
+                    searchRoot.querySelector('[data-video-id]') !== null ||
+                    searchRoot.querySelector('a[href*="/videos/"]') !== null ||
+                    searchRoot.querySelector('a[href*="/reel/"]') !== null ||
+                    searchRoot.querySelector('[aria-label="Play video"]') !== null
+                );
+        
+                candidates.push({ src: img.src, photoHref, hasVideo: !!hasVideo });
+            }
+        
+            return candidates;
         });
         
-        if (!postImageInfo) {
-            process.stderr.write('No suitable post image found on Facebook page.\n');
+        if (!postImageInfo || postImageInfo.length === 0) {
+            process.stderr.write('No photo-linked images found on Facebook page.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
         
-        if (postImageInfo.isVideo) {
-            process.stderr.write('Latest post is a video. Skipping.\n');
-            console.log(JSON.stringify({ error: 'no_image_found' }));
-            return;
-        }
-        
-        // Pick the candidate whose captured buffer is largest (most likely the post image)
+        // Pick the largest captured image among candidates that aren't in a video post
         let bestSrc = null;
         let bestPhotoHref = null;
         let bestSize = 0;
         
-        for (const { src, photoHref } of postImageInfo.candidates) {
+        for (const { src, photoHref, hasVideo } of postImageInfo) {
+            if (hasVideo) continue;
             const filename = getFilename(src);
             const buf = capturedImages[filename];
             const size = buf ? buf.length : 0;
-            process.stderr.write(`Candidate: ${filename} (${size} bytes captured)\n`);
+            process.stderr.write(`Candidate: ${filename} (${size} bytes, video=${hasVideo})\n`);
             if (size > bestSize) {
                 bestSize = size;
                 bestSrc = src;
@@ -177,16 +178,15 @@ async function getLatestFacebookImage() {
             }
         }
         
-        // Reject if the best candidate is suspiciously small (icon/avatar threshold)
         if (!bestSrc || bestSize < 10000) {
-            process.stderr.write('No suitable post image found on Facebook page.\n');
+            process.stderr.write('No suitable post image found (all posts may be videos or images too small).\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
         
         const targetFilename = getFilename(bestSrc);
         const postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
-        process.stderr.write(`DOM identified post image: ${targetFilename} (${bestSize} bytes)\n`);
+        process.stderr.write(`Selected post image: ${targetFilename} (${bestSize} bytes)\n`);
 
         // Phase 3: click through to the photo viewer to get the full-res image
         // We set up a NEW response listener that only triggers after the click,
