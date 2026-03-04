@@ -109,62 +109,65 @@ async function getLatestFacebookImage() {
         });
         process.stderr.write(`DEBUG FeedUnit_0: ${JSON.stringify(debugInfo, null, 2)}\n`);
         
-        // Phase 2: find post images without relying on data-pagelet
+        // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
-            const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
+            const latestPost = document.querySelector('[data-pagelet="TimelineFeedUnit_0"]');
         
-            const candidates = [];
-            for (const img of imgs) {
+            if (!latestPost) return null;
+        
+            const hasVideo =
+                latestPost.querySelector('video') !== null ||
+                latestPost.querySelector('[data-video-id]') !== null ||
+                latestPost.querySelector('[aria-label="Play video"]') !== null ||
+                latestPost.querySelector('[aria-label="Play"]') !== null ||
+                latestPost.querySelector('[data-sigil="inlineVideo"]') !== null ||
+                latestPost.querySelector('a[href*="/videos/"]') !== null ||
+                latestPost.querySelector('a[href*="/reel/"]') !== null;
+        
+            if (hasVideo) return { isVideo: true };
+        
+            const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
+            if (!imgs.length) return null;
+        
+            const candidates = imgs.map(img => {
                 let photoHref = null;
-                let postContainer = null;
                 let el = img;
-                for (let i = 0; i < 12; i++) {
+                for (let i = 0; i < 8; i++) {
                     if (!el) break;
-                    if (!photoHref && el.tagName === 'A' && el.href && el.href.includes('/photo')) {
+                    if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
                         photoHref = el.href;
-                    }
-                    if (!postContainer && (
-                        el.getAttribute('role') === 'article' ||
-                        el.getAttribute('aria-posinset') !== null
-                    )) {
-                        postContainer = el;
+                        break;
                     }
                     el = el.parentElement;
                 }
+                return { src: img.src, photoHref };
+            });
         
-                if (!photoHref) continue;
-        
-                const searchRoot = postContainer || img.parentElement;
-                const hasVideo = searchRoot && (
-                    searchRoot.querySelector('video') !== null ||
-                    searchRoot.querySelector('[data-video-id]') !== null ||
-                    searchRoot.querySelector('a[href*="/videos/"]') !== null ||
-                    searchRoot.querySelector('a[href*="/reel/"]') !== null ||
-                    searchRoot.querySelector('[aria-label="Play video"]') !== null
-                );
-        
-                candidates.push({ src: img.src, photoHref, hasVideo: !!hasVideo });
-            }
-        
-            return candidates;
+            return { candidates };
         });
         
-        if (!postImageInfo || postImageInfo.length === 0) {
+        if (!postImageInfo) {
+            process.stderr.write('No photo-linked images found on Facebook page.\n');
+            console.log(JSON.stringify({ error: 'no_image_found' }));
+            return;
+        }
+
+        // Add this check right after:
+        if (postImageInfo.isVideo) {
+            process.stderr.write('Latest post is a video. Skipping.\n');
+            console.log(JSON.stringify({ error: 'no_image_found' }));
+            return;
+        }
+        
+        if (!postImageInfo.candidates || postImageInfo.candidates.length === 0) {
             process.stderr.write('No photo-linked images found on Facebook page.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
         
         // The first candidate in DOM order belongs to the latest post
-        const firstCandidate = postImageInfo[0];
-        
-        process.stderr.write(`First post candidate: ${getFilename(firstCandidate.src)} (video=${firstCandidate.hasVideo})\n`);
-        
-        if (firstCandidate.hasVideo) {
-            process.stderr.write('Latest post is a video. Skipping.\n');
-            console.log(JSON.stringify({ error: 'no_image_found' }));
-            return;
-        }
+        const firstCandidate = postImageInfo.candidates[0];
+        process.stderr.write(`First post candidate: ${getFilename(firstCandidate.src)}\n`);
         
         const buf = capturedImages[getFilename(firstCandidate.src)];
         const size = buf ? buf.length : 0;
