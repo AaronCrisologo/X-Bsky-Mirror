@@ -24,6 +24,11 @@ function getFilename(url) {
 }
 
 async function getLatestFacebookImage() {
+    // Warn if cookies are missing — scraper will still work but images will be low-res
+    if (!process.env.FB_C_USER || !process.env.FB_XS) {
+        process.stderr.write('⚠️  FB_C_USER or FB_XS not set — running without session cookies (low-res fallback).\n');
+    }
+
     const browser = await puppeteer.launch({
         headless: "new",
         args: [
@@ -81,7 +86,27 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Phase 2: DOM identifies the correct post image element
+        // Phase 2: Check if the latest post (FeedUnit_0) is a video.
+        // If it is, we stop here and signal fallback — we never want to silently
+        // slide to the next post's image when the latest FB post is a video.
+        const latestPostIsVideo = await page.evaluate(() => {
+            const firstPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
+            if (!firstPost) return false;
+            return !!(
+                firstPost.querySelector('video') ||
+                firstPost.querySelector('[data-testid="videoPlayer"]') ||
+                firstPost.querySelector('[aria-label="Play video"]') ||
+                firstPost.querySelector('[data-video-id]')
+            );
+        });
+
+        if (latestPostIsVideo) {
+            process.stderr.write('Latest Facebook post is a video — using local fallback.\n');
+            console.log(JSON.stringify({ error: 'latest_post_is_video' }));
+            return;
+        }
+
+        // Phase 2b: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
             const selectors = [
                 '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
@@ -109,7 +134,6 @@ async function getLatestFacebookImage() {
                     }
                     return {
                         src: postImg.src,
-                        // Return a CSS path we can use to click the element outside evaluate()
                         isLink: clickTarget !== postImg,
                         photoHref: clickTarget !== postImg ? clickTarget.href : null
                     };
@@ -128,8 +152,6 @@ async function getLatestFacebookImage() {
         process.stderr.write(`DOM identified post image: ${targetFilename}\n`);
 
         // Phase 3: click through to the photo viewer to get the full-res image
-        // We set up a NEW response listener that only triggers after the click,
-        // so we catch exactly the full-res image Facebook loads in the viewer.
         let fullResBuffer = null;
         let fullResBytes = 0;
 
@@ -141,11 +163,8 @@ async function getLatestFacebookImage() {
                 if (url.includes('rsrc.php')) return;
                 const ct = response.headers()['content-type'] || '';
                 if (!ct.startsWith('image/')) return;
-
                 const filename = getFilename(url);
-                // Only care about the specific image we identified
                 if (filename !== targetFilename) return;
-
                 const buffer = await response.buffer();
                 if (buffer.length > fullResBytes) {
                     fullResBuffer = buffer;
@@ -157,8 +176,6 @@ async function getLatestFacebookImage() {
 
         page.on('response', fullResListener);
 
-        // Navigate to the photo viewer — if we found a /photo link use it directly,
-        // otherwise click the image itself
         if (postImageInfo.photoHref) {
             process.stderr.write(`Navigating to photo viewer: ${postImageInfo.photoHref}\n`);
             await page.goto(postImageInfo.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -168,7 +185,6 @@ async function getLatestFacebookImage() {
                 const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
                 const img = imgs.find(i => i.src === targetSrc);
                 if (img) {
-                    // Try clicking the wrapping element
                     let el = img;
                     for (let i = 0; i < 8; i++) {
                         if (!el) break;
