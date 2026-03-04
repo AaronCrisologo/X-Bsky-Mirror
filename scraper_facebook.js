@@ -173,7 +173,7 @@ async function getLatestFacebookImage() {
         }
 
         if (!postImageInfo_resolved) {
-            // Network capture fallback: first captured image over 20KB in arrival order
+            // Network capture fallback: first captured image over 10KB in arrival order
             process.stderr.write('No pagelet found — using network capture fallback.\n');
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
@@ -191,8 +191,24 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Note: video detection is skipped in the network fallback path because we cannot
-            // reliably scope it to just the first post — videos elsewhere on the page cause false positives.
+            // Check if the latest post is a video before committing
+            const fallbackVideoCheck = await page.evaluate(() => {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                const root = articles[0] || document.body;
+                return (
+                    root.querySelector('video') !== null ||
+                    root.querySelector('[data-video-id]') !== null ||
+                    root.querySelector('a[href*="/videos/"]') !== null ||
+                    root.querySelector('a[href*="/reel/"]') !== null ||
+                    root.querySelector('[aria-label="Play video"]') !== null
+                );
+            });
+
+            if (fallbackVideoCheck) {
+                process.stderr.write('Latest post appears to be a video. Skipping.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
 
             // Try to find a photo href for full-res navigation
             const fallbackPhotoHref = await page.evaluate((fname) => {
