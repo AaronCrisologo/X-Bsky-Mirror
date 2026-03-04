@@ -81,6 +81,34 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
+        // TEMPORARY DEBUG — remove after diagnosis
+        const debugInfo = await page.evaluate(() => {
+            const fp0 = document.querySelector('[data-pagelet="FeedUnit_0"]');
+            if (!fp0) {
+                // Check what pagelets actually exist
+                const allPagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
+                    .map(el => el.getAttribute('data-pagelet'))
+                    .filter(p => p.includes('Feed'));
+                return { fp0Exists: false, feedPagelets: allPagelets };
+            }
+            const imgs = Array.from(fp0.querySelectorAll('img'));
+            const videoSignals = {
+                video: !!fp0.querySelector('video'),
+                dataVideoId: !!fp0.querySelector('[data-video-id]'),
+                ariaPlayVideo: !!fp0.querySelector('[aria-label="Play video"]'),
+                ariaPlay: !!fp0.querySelector('[aria-label="Play"]'),
+                videoLink: !!fp0.querySelector('a[href*="/videos/"]'),
+                reelLink: !!fp0.querySelector('a[href*="/reel/"]'),
+            };
+            return {
+                fp0Exists: true,
+                videoSignals,
+                imgCount: imgs.length,
+                imgSrcs: imgs.map(i => i.src).filter(s => s.includes('fbcdn')),
+            };
+        });
+        process.stderr.write(`DEBUG FeedUnit_0: ${JSON.stringify(debugInfo, null, 2)}\n`);
+        
         // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
             const latestPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
