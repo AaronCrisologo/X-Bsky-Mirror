@@ -24,6 +24,7 @@ function getFilename(url) {
 }
 
 async function getLatestFacebookImage() {
+    // Warn if cookies are missing — scraper will still work but images will be low-res
     if (!process.env.FB_C_USER || !process.env.FB_XS) {
         process.stderr.write('⚠️  FB_C_USER or FB_XS not set — running without session cookies (low-res fallback).\n');
     }
@@ -85,55 +86,22 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Phase 2: Find the topmost post on the page and check if it has a qualifying image.
-        // If the latest post is a video/reel it will have no qualifying image — signal fallback.
-        // We try multiple strategies to find the first post container, sorted by vertical position.
-        const latestPostCheck = await page.evaluate(() => {
-            // Strategy 1: FeedUnit pagelet containers (sorted by number)
-            const allFeedUnits = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
-            if (allFeedUnits.length > 0) {
-                allFeedUnits.sort((a, b) => {
-                    const aNum = parseInt((a.getAttribute('data-pagelet') || '').replace('FeedUnit_', '') || '999');
-                    const bNum = parseInt((b.getAttribute('data-pagelet') || '').replace('FeedUnit_', '') || '999');
-                    return aNum - bNum;
-                });
-                const firstPost = allFeedUnits[0];
-                const pagelet = firstPost.getAttribute('data-pagelet');
-                const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
-                const postImg = imgs.find(img => {
-                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                    return w > 200 && h > 200;
-                });
-                return { postFound: true, hasImage: !!postImg, pagelet };
-            }
-
-            // Strategy 2: role="article" elements — pick the topmost by vertical position
-            const articles = Array.from(document.querySelectorAll('[role="article"]'));
-            if (articles.length > 0) {
-                // Filter out nested articles (e.g. shared post previews inside a post)
-                const topLevel = articles.filter(a => !articles.some(b => b !== a && b.contains(a)));
-                topLevel.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-                const firstPost = topLevel[0];
-                const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
-                const postImg = imgs.find(img => {
-                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                    return w > 200 && h > 200;
-                });
-                return { postFound: true, hasImage: !!postImg, pagelet: 'role=article' };
-            }
-
-            return { postFound: false, hasImage: false, pagelet: 'none' };
+        // Phase 2: Check if the latest post (FeedUnit_0) is a video.
+        // If it is, we stop here and signal fallback — we never want to silently
+        // slide to the next post's image when the latest FB post is a video.
+        const latestPostIsVideo = await page.evaluate(() => {
+            const firstPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
+            if (!firstPost) return false;
+            return !!(
+                firstPost.querySelector('video') ||
+                firstPost.querySelector('[data-testid="videoPlayer"]') ||
+                firstPost.querySelector('[aria-label="Play video"]') ||
+                firstPost.querySelector('[data-video-id]')
+            );
         });
 
-        process.stderr.write(`First post container: "${latestPostCheck.pagelet}", has image: ${latestPostCheck.hasImage}\n`);
-
-        // Trigger fallback if:
-        //  - we found a post container but it has no image (video/reel), OR
-        //  - we found no container at all (can't determine post type — safe to fallback)
-        if (!latestPostCheck.hasImage) {
-            process.stderr.write('Latest Facebook post has no image (likely a video/reel) — using local fallback.\n');
+        if (latestPostIsVideo) {
+            process.stderr.write('Latest Facebook post is a video — using local fallback.\n');
             console.log(JSON.stringify({ error: 'latest_post_is_video' }));
             return;
         }
@@ -153,6 +121,7 @@ async function getLatestFacebookImage() {
                     return w > 200 && h > 200;
                 });
                 if (postImg) {
+                    // Walk up to find a clickable link wrapping the image
                     let clickTarget = postImg;
                     let el = postImg;
                     for (let i = 0; i < 8; i++) {
@@ -236,17 +205,18 @@ async function getLatestFacebookImage() {
             }
         }
 
+        // Give the viewer time to fully load the high-res image
         await new Promise(r => setTimeout(r, 4000));
 
+        // Pick the best buffer: full-res from viewer if we got it, else feed capture
         const feedBuffer = capturedImages[targetFilename];
 
-        const bestBuffer = (fullResBuffer && fullResBuffer.length >= (feedBuffer ? feedBuffer.length : 0)) ? fullResBuffer : feedBuffer;
-        const bestBytes = bestBuffer ? bestBuffer.length : 0;
-        const source = (fullResBuffer && fullResBuffer.length >= (feedBuffer ? feedBuffer.length : 0)) ? 'viewer' : 'feed capture';
-
-        if (bestBuffer) {
-            process.stderr.write(`Saving image (, ${bestBytes} bytes)\n`);
-            fs.writeFileSync(OUTPUT_FILE, bestBuffer);
+        if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
+            process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
+            fs.writeFileSync(OUTPUT_FILE, fullResBuffer);
+        } else if (feedBuffer) {
+            process.stderr.write(`Viewer didn't load higher res, using feed capture: ${feedBuffer.length} bytes\n`);
+            fs.writeFileSync(OUTPUT_FILE, feedBuffer);
         } else {
             process.stderr.write('No image buffer available.\n');
             console.log(JSON.stringify({ error: 'download_failed' }));
