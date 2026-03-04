@@ -175,28 +175,6 @@ async function getLatestFacebookImage() {
         if (!postImageInfo_resolved) {
             // Network capture fallback: first captured image over 20KB in arrival order
             process.stderr.write('No pagelet found — using network capture fallback.\n');
-
-            // Detect if there is a pinned post — if so, we need to skip one extra image
-            const hasPinnedPost = await page.evaluate(() => {
-                const pinSignals = [
-                    '[aria-label="Pinned post"]',
-                    '[aria-label="Pinned"]',
-                ];
-                for (const sel of pinSignals) {
-                    if (document.querySelector(sel)) return true;
-                }
-                // Also check for the pinned icon text used in some locales
-                const spans = Array.from(document.querySelectorAll('span'));
-                return spans.some(s => s.textContent.trim() === 'Pinned post' || s.textContent.trim() === 'Pinned');
-            });
-
-            if (hasPinnedPost) {
-                process.stderr.write('Pinned post detected — skipping an extra image.\n');
-            }
-
-            // banner = match 1, pinned post image (if any) = match 2, latest post = match 2 or 3
-            const targetMatchCount = hasPinnedPost ? 3 : 2;
-
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
@@ -204,7 +182,7 @@ async function getLatestFacebookImage() {
                 if (filename.endsWith('.kf')) return false;
                 if (filename.endsWith('.png') && size < 50000) return false;
                 matchCount++;
-                return matchCount === targetMatchCount;
+                return matchCount === 2; // skip first match (banner), take second
             });
 
             if (!candidate) {
@@ -213,17 +191,24 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Check if the latest post is a video before committing
+            // Check if the latest post is a video — search broadly since article elements are often empty
             const fallbackVideoCheck = await page.evaluate(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                const root = articles[0] || document.body;
-                return (
-                    root.querySelector('video') !== null ||
-                    root.querySelector('[data-video-id]') !== null ||
-                    root.querySelector('a[href*="/videos/"]') !== null ||
-                    root.querySelector('a[href*="/reel/"]') !== null ||
-                    root.querySelector('[aria-label="Play video"]') !== null
-                );
+                // Check anywhere on the page for video signals that appear before any post image
+                const videoSignals = [
+                    'video',
+                    '[data-video-id]',
+                    '[aria-label="Play video"]',
+                    '[aria-label="Play"]',
+                    '[data-sigil="inlineVideo"]',
+                ];
+                for (const sel of videoSignals) {
+                    if (document.querySelector(sel)) return true;
+                }
+                // Check all links — if the first post-style link is a /videos/ or /reel/ link, it's a video post
+                const postLinks = Array.from(document.querySelectorAll('a[href*="/videos/"], a[href*="/reel/"]'));
+                // Filter out nav/sidebar links by checking they're not in the header
+                const header = document.querySelector('header, [role="banner"]');
+                return postLinks.some(a => !header || !header.contains(a));
             });
 
             if (fallbackVideoCheck) {
