@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
+const FB_PAGE_URL = 'https://www.facebook.com/ZZZ.Official.EN';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -173,8 +173,30 @@ async function getLatestFacebookImage() {
         }
 
         if (!postImageInfo_resolved) {
-            // Network capture fallback: first captured image over 10KB in arrival order
+            // Network capture fallback: first captured image over 20KB in arrival order
             process.stderr.write('No pagelet found — using network capture fallback.\n');
+
+            // Detect if there is a pinned post — if so, we need to skip one extra image
+            const hasPinnedPost = await page.evaluate(() => {
+                const pinSignals = [
+                    '[aria-label="Pinned post"]',
+                    '[aria-label="Pinned"]',
+                ];
+                for (const sel of pinSignals) {
+                    if (document.querySelector(sel)) return true;
+                }
+                // Also check for the pinned icon text used in some locales
+                const spans = Array.from(document.querySelectorAll('span'));
+                return spans.some(s => s.textContent.trim() === 'Pinned post' || s.textContent.trim() === 'Pinned');
+            });
+
+            if (hasPinnedPost) {
+                process.stderr.write('Pinned post detected — skipping an extra image.\n');
+            }
+
+            // banner = match 1, pinned post image (if any) = match 2, latest post = match 2 or 3
+            const targetMatchCount = hasPinnedPost ? 3 : 2;
+
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
@@ -182,7 +204,7 @@ async function getLatestFacebookImage() {
                 if (filename.endsWith('.kf')) return false;
                 if (filename.endsWith('.png') && size < 50000) return false;
                 matchCount++;
-                return matchCount === 2; // skip first match (banner), take second
+                return matchCount === targetMatchCount;
             });
 
             if (!candidate) {
