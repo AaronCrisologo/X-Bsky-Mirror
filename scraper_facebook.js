@@ -146,12 +146,18 @@ async function getLatestFacebookImage() {
             const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
             if (!imgs.length) return null;
         
+            // Collect ALL fbcdn imgs — don't require a /photo link
             const candidates = imgs.map(img => {
                 let photoHref = null;
                 let el = img;
-                for (let i = 0; i < 8; i++) {
+                for (let i = 0; i < 12; i++) {
                     if (!el) break;
-                    if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
+                    if (el.tagName === 'A' && el.href && (
+                        el.href.includes('/photo') ||
+                        el.href.includes('/posts/') ||
+                        el.href.includes('story_fbid') ||
+                        el.href.includes('permalink')
+                    )) {
                         photoHref = el.href;
                         break;
                     }
@@ -159,8 +165,16 @@ async function getLatestFacebookImage() {
                 }
                 return { src: img.src, photoHref };
             });
-        
-            return { candidates };
+            
+            // Filter out known non-post images (profile pics, icons) by src patterns
+            const filtered = candidates.filter(c =>
+                !c.src.includes('_s.jpg') &&   // small/square profile crops
+                !c.src.includes('p40x40') &&
+                !c.src.includes('p50x50') &&
+                !c.src.includes('p60x60')
+            );
+            
+            return { candidates: filtered.length ? filtered : candidates };
         });
         
         if (!postImageInfo) {
