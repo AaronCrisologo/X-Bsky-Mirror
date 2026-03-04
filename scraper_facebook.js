@@ -191,9 +191,49 @@ async function getLatestFacebookImage() {
                 return;
             }
 
+            // Check if the latest post is a video before committing
+            const fallbackVideoCheck = await page.evaluate(() => {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                const root = articles[0] || document.body;
+                return (
+                    root.querySelector('video') !== null ||
+                    root.querySelector('[data-video-id]') !== null ||
+                    root.querySelector('a[href*="/videos/"]') !== null ||
+                    root.querySelector('a[href*="/reel/"]') !== null ||
+                    root.querySelector('[aria-label="Play video"]') !== null
+                );
+            });
+
+            if (fallbackVideoCheck) {
+                process.stderr.write('Latest post appears to be a video. Skipping.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+
+            // Try to find a photo href for full-res navigation
+            const fallbackPhotoHref = await page.evaluate((fname) => {
+                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
+                const img = imgs.find(i => {
+                    try { return new URL(i.src).pathname.split('/').pop() === fname; } catch(_) { return false; }
+                });
+                if (!img) return null;
+                let el = img;
+                for (let i = 0; i < 12; i++) {
+                    if (!el) break;
+                    if (el.tagName === 'A' && el.href && (
+                        el.href.includes('/photo') ||
+                        el.href.includes('/posts/') ||
+                        el.href.includes('story_fbid') ||
+                        el.href.includes('permalink')
+                    )) return el.href;
+                    el = el.parentElement;
+                }
+                return null;
+            }, candidate);
+
             targetFilename = candidate;
-            postImageInfo_resolved = { src: null, photoHref: null };
-            process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)\n`);
+            postImageInfo_resolved = { src: null, photoHref: fallbackPhotoHref };
+            process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)${fallbackPhotoHref ? ' [photo link found]' : ''}\n`);
         }
 
         // Phase 3: navigate to photo viewer for full-res, if we have a link
