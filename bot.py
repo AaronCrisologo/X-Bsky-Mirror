@@ -156,7 +156,7 @@ def is_already_posted(client, new_text):
 
 
 # === CONFIGURATION ===
-SIMULATION_MODE = False  # Set to True to test without running scrapers
+SIMULATION_MODE = False  # Set to True to test without running X scraper
 
 def main():
     client = Client()
@@ -183,7 +183,7 @@ def main():
 #FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [],
-            'hasVideo': False
+            'hasVideo': True
         }
     else:
         print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Production...")
