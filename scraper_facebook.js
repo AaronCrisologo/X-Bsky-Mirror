@@ -82,52 +82,48 @@ async function getLatestFacebookImage() {
         await new Promise(r => setTimeout(r, 2000));
 
         // Phase 2: DOM identifies the correct post image element
-        // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
-            // If the latest post contains a video, bail out immediately
             const latestPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
-            if (latestPost) {
-                const hasVideo =
-                    latestPost.querySelector('video') !== null ||
-                    latestPost.querySelector('[data-video-id]') !== null ||
-                    latestPost.querySelector('[aria-label="Play video"]') !== null ||
-                    latestPost.querySelector('[aria-label="Play"]') !== null;
-                if (hasVideo) return { isVideo: true };
-            }
-
-            const selectors = [
-                '[data-pagelet="FeedUnit_0"] img[src*="fbcdn"]',
-                '[data-pagelet^="FeedUnit"] img[src*="fbcdn"]',
-                'img[src*="fbcdn"][width]'
-            ];
-            for (const selector of selectors) {
-                const imgs = Array.from(document.querySelectorAll(selector));
-                const postImg = imgs.find(img => {
-                    const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
-                    const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
-                    return w > 200 && h > 200;
-                });
-                if (postImg) {
-                    // Walk up to find a clickable link wrapping the image
-                    let clickTarget = postImg;
-                    let el = postImg;
-                    for (let i = 0; i < 8; i++) {
-                        if (!el) break;
-                        if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
-                            clickTarget = el;
-                            break;
-                        }
-                        el = el.parentElement;
-                    }
-                    return {
-                        src: postImg.src,
-                        // Return a CSS path we can use to click the element outside evaluate()
-                        isLink: clickTarget !== postImg,
-                        photoHref: clickTarget !== postImg ? clickTarget.href : null
-                    };
+        
+            if (!latestPost) return null;
+        
+            // Check for video — Facebook uses several different patterns
+            const hasVideo =
+                latestPost.querySelector('video') !== null ||
+                latestPost.querySelector('[data-video-id]') !== null ||
+                latestPost.querySelector('[aria-label="Play video"]') !== null ||
+                latestPost.querySelector('[aria-label="Play"]') !== null ||
+                latestPost.querySelector('[data-sigil="inlineVideo"]') !== null ||
+                latestPost.querySelector('a[href*="/videos/"]') !== null ||
+                latestPost.querySelector('a[href*="/reel/"]') !== null;
+        
+            if (hasVideo) return { isVideo: true };
+        
+            // Only ever look inside FeedUnit_0 — never fall through to other posts
+            const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
+            const postImg = imgs.find(img => {
+                const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
+                const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                return w > 200 && h > 200;
+            });
+        
+            if (!postImg) return null;
+        
+            let clickTarget = postImg;
+            let el = postImg;
+            for (let i = 0; i < 8; i++) {
+                if (!el) break;
+                if (el.tagName === 'A' && el.href && el.href.includes('/photo')) {
+                    clickTarget = el;
+                    break;
                 }
+                el = el.parentElement;
             }
-            return null;
+            return {
+                src: postImg.src,
+                isLink: clickTarget !== postImg,
+                photoHref: clickTarget !== postImg ? clickTarget.href : null
+            };
         });
 
         if (!postImageInfo || postImageInfo.isVideo) {
