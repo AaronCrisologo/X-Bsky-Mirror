@@ -24,7 +24,6 @@ function getFilename(url) {
 }
 
 async function getLatestFacebookImage() {
-    // Warn if cookies are missing — scraper will still work but images will be low-res
     if (!process.env.FB_C_USER || !process.env.FB_XS) {
         process.stderr.write('⚠️  FB_C_USER or FB_XS not set — running without session cookies (low-res fallback).\n');
     }
@@ -86,22 +85,31 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // Phase 2: Check if the latest post (FeedUnit_0) is a video.
-        // If it is, we stop here and signal fallback — we never want to silently
-        // slide to the next post's image when the latest FB post is a video.
-        const latestPostIsVideo = await page.evaluate(() => {
+        // Phase 2: Check the latest post (FeedUnit_0) specifically.
+        // We check two things:
+        //   A) Does FeedUnit_0 exist at all?
+        //   B) Does FeedUnit_0 contain a qualifying post image?
+        // If FeedUnit_0 exists but has NO qualifying image, the latest post is a video
+        // or reel — signal fallback immediately rather than sliding to the next post.
+        const latestPostCheck = await page.evaluate(() => {
             const firstPost = document.querySelector('[data-pagelet="FeedUnit_0"]');
-            if (!firstPost) return false;
-            return !!(
-                firstPost.querySelector('video') ||
-                firstPost.querySelector('[data-testid="videoPlayer"]') ||
-                firstPost.querySelector('[aria-label="Play video"]') ||
-                firstPost.querySelector('[data-video-id]')
-            );
+            if (!firstPost) {
+                // FeedUnit_0 not found — feed structure may differ, let later logic handle it
+                return { feedUnitFound: false, hasImage: false };
+            }
+            const imgs = Array.from(firstPost.querySelectorAll('img[src*="fbcdn"]'));
+            const postImg = imgs.find(img => {
+                const w = img.naturalWidth || parseInt(img.getAttribute('width') || '0');
+                const h = img.naturalHeight || parseInt(img.getAttribute('height') || '0');
+                return w > 200 && h > 200;
+            });
+            return { feedUnitFound: true, hasImage: !!postImg };
         });
 
-        if (latestPostIsVideo) {
-            process.stderr.write('Latest Facebook post is a video — using local fallback.\n');
+        process.stderr.write(`FeedUnit_0 found: ${latestPostCheck.feedUnitFound}, has image: ${latestPostCheck.hasImage}\n`);
+
+        if (latestPostCheck.feedUnitFound && !latestPostCheck.hasImage) {
+            process.stderr.write('Latest Facebook post has no image (likely a video/reel) — using local fallback.\n');
             console.log(JSON.stringify({ error: 'latest_post_is_video' }));
             return;
         }
@@ -121,7 +129,6 @@ async function getLatestFacebookImage() {
                     return w > 200 && h > 200;
                 });
                 if (postImg) {
-                    // Walk up to find a clickable link wrapping the image
                     let clickTarget = postImg;
                     let el = postImg;
                     for (let i = 0; i < 8; i++) {
@@ -205,10 +212,8 @@ async function getLatestFacebookImage() {
             }
         }
 
-        // Give the viewer time to fully load the high-res image
         await new Promise(r => setTimeout(r, 4000));
 
-        // Pick the best buffer: full-res from viewer if we got it, else feed capture
         const feedBuffer = capturedImages[targetFilename];
 
         if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
