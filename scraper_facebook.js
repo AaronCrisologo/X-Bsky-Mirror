@@ -86,33 +86,33 @@ async function getLatestFacebookImage() {
         await page.evaluate(() => window.scrollBy(0, 400));
         await new Promise(r => setTimeout(r, 2000));
 
-        // TEMPORARY DEBUG — remove after diagnosis
+        // TEMPORARY DEBUG
         const debugInfo = await page.evaluate(() => {
-            const fp0 = document.querySelector('[data-pagelet="FeedUnit_0"]');
-            if (!fp0) {
-                // Check what pagelets actually exist
-                const allPagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
-                    .map(el => el.getAttribute('data-pagelet'))
-                    .filter(p => p.includes('Feed'));
-                return { fp0Exists: false, feedPagelets: allPagelets };
+            const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
+            let foundPagelet = null;
+            for (const name of pageletNames) {
+                const el = document.querySelector(`[data-pagelet="${name}"]`);
+                if (el) { foundPagelet = name; break; }
             }
-            const imgs = Array.from(fp0.querySelectorAll('img'));
-            const videoSignals = {
-                video: !!fp0.querySelector('video'),
-                dataVideoId: !!fp0.querySelector('[data-video-id]'),
-                ariaPlayVideo: !!fp0.querySelector('[aria-label="Play video"]'),
-                ariaPlay: !!fp0.querySelector('[aria-label="Play"]'),
-                videoLink: !!fp0.querySelector('a[href*="/videos/"]'),
-                reelLink: !!fp0.querySelector('a[href*="/reel/"]'),
-            };
+        
+            const articles = Array.from(document.querySelectorAll('[role="article"]'));
+            const articlesWithImages = articles.filter(a => a.querySelector('img[src*="fbcdn"]'));
+        
+            const allFeedPagelets = Array.from(document.querySelectorAll('[data-pagelet]'))
+                .map(el => el.getAttribute('data-pagelet'))
+                .filter(p => p.toLowerCase().includes('feed') || p.toLowerCase().includes('unit'));
+        
             return {
-                fp0Exists: true,
-                videoSignals,
-                imgCount: imgs.length,
-                imgSrcs: imgs.map(i => i.src).filter(s => s.includes('fbcdn')),
+                foundPagelet,
+                allFeedPagelets,
+                totalArticles: articles.length,
+                articlesWithFbcdnImages: articlesWithImages.length,
+                firstArticleImgSrcs: articlesWithImages[0]
+                    ? Array.from(articlesWithImages[0].querySelectorAll('img[src*="fbcdn"]')).map(i => i.src)
+                    : []
             };
         });
-        process.stderr.write(`DEBUG FeedUnit_0: ${JSON.stringify(debugInfo, null, 2)}\n`);
+        process.stderr.write(`DEBUG Phase2: ${JSON.stringify(debugInfo, null, 2)}\n`);
         
         // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
