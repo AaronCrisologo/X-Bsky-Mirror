@@ -116,7 +116,19 @@ async function getLatestFacebookImage() {
         
         // Phase 2: DOM identifies the correct post image element
         const postImageInfo = await page.evaluate(() => {
-            const latestPost = document.querySelector('[data-pagelet="TimelineFeedUnit_0"]');
+            // Try known pagelet names in order of preference
+            const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
+            let latestPost = null;
+            for (const name of pageletNames) {
+                latestPost = document.querySelector(`[data-pagelet="${name}"]`);
+                if (latestPost) break;
+            }
+        
+            // Final fallback: first role=article that contains an fbcdn image
+            if (!latestPost) {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                latestPost = articles.find(a => a.querySelector('img[src*="fbcdn"]')) || null;
+            }
         
             if (!latestPost) return null;
         
