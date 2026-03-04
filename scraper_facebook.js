@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
+const FB_PAGE_URL = 'https://www.facebook.com/ZZZ.Official.EN';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -191,24 +191,8 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Check if the latest post is a video — only use signals that appear on actual video posts
-            const fallbackVideoCheck = await page.evaluate(() => {
-                // Check for data-video-id or play video aria-label (never on avatars)
-                if (document.querySelector('[data-video-id]')) return '[data-video-id]';
-                if (document.querySelector('[aria-label="Play video"]')) return '[aria-label="Play video"]';
-                if (document.querySelector('[data-sigil="inlineVideo"]')) return '[data-sigil="inlineVideo"]';
-                // Only count <video> elements that are large enough to be a post video (not an avatar)
-                const videos = Array.from(document.querySelectorAll('video'));
-                const postVideo = videos.find(v => v.offsetWidth > 200 || v.offsetHeight > 200);
-                if (postVideo) return `video (${postVideo.offsetWidth}x${postVideo.offsetHeight})`;
-                return null;
-            });
-
-            if (fallbackVideoCheck) {
-                process.stderr.write(`Latest post appears to be a video (signal: ${fallbackVideoCheck}). Skipping.\n`);
-                console.log(JSON.stringify({ error: 'no_image_found' }));
-                return;
-            }
+            // Note: video detection is skipped in the network fallback path because we cannot
+            // reliably scope it to just the first post — videos elsewhere on the page cause false positives.
 
             // Try to find a photo href for full-res navigation
             const fallbackPhotoHref = await page.evaluate((fname) => {
