@@ -193,18 +193,20 @@ async function getLatestFacebookImage() {
 
             // Check if the latest post is a video — only use signals that appear on actual video posts
             const fallbackVideoCheck = await page.evaluate(() => {
-                // These signals only appear when a video post is rendered, not in nav/sidebar
                 const videoSignals = [
                     'video',
                     '[data-video-id]',
                     '[aria-label="Play video"]',
                     '[data-sigil="inlineVideo"]',
                 ];
-                return videoSignals.some(sel => document.querySelector(sel) !== null);
+                for (const sel of videoSignals) {
+                    if (document.querySelector(sel)) return sel; // return which one matched
+                }
+                return null;
             });
 
             if (fallbackVideoCheck) {
-                process.stderr.write('Latest post appears to be a video. Skipping.\n');
+                process.stderr.write(`Latest post appears to be a video (signal: ${fallbackVideoCheck}). Skipping.\n`);
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
