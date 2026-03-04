@@ -178,7 +178,7 @@ async function getLatestFacebookImage() {
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
-                if (size < 10000) return false;
+                if (size < 20000) return false;
                 if (filename.endsWith('.kf')) return false;
                 if (filename.endsWith('.png') && size < 50000) return false;
                 matchCount++;
