@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
+const FB_PAGE_URL = 'https://www.facebook.com/ZZZ.Official.EN';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -193,15 +193,14 @@ async function getLatestFacebookImage() {
 
             // Check if the latest post is a video — only use signals that appear on actual video posts
             const fallbackVideoCheck = await page.evaluate(() => {
-                const videoSignals = [
-                    'video',
-                    '[data-video-id]',
-                    '[aria-label="Play video"]',
-                    '[data-sigil="inlineVideo"]',
-                ];
-                for (const sel of videoSignals) {
-                    if (document.querySelector(sel)) return sel; // return which one matched
-                }
+                // Check for data-video-id or play video aria-label (never on avatars)
+                if (document.querySelector('[data-video-id]')) return '[data-video-id]';
+                if (document.querySelector('[aria-label="Play video"]')) return '[aria-label="Play video"]';
+                if (document.querySelector('[data-sigil="inlineVideo"]')) return '[data-sigil="inlineVideo"]';
+                // Only count <video> elements that are large enough to be a post video (not an avatar)
+                const videos = Array.from(document.querySelectorAll('video'));
+                const postVideo = videos.find(v => v.offsetWidth > 200 || v.offsetHeight > 200);
+                if (postVideo) return `video (${postVideo.offsetWidth}x${postVideo.offsetHeight})`;
                 return null;
             });
 
