@@ -175,12 +175,14 @@ async function getLatestFacebookImage() {
         if (!postImageInfo_resolved) {
             // Network capture fallback: first captured image over 10KB in arrival order
             process.stderr.write('No pagelet found — using network capture fallback.\n');
+            let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
                 if (size < 10000) return false;
                 if (filename.endsWith('.kf')) return false;
-                if (filename.endsWith('.png') && capturedImages[filename].length < 50000) return false;
-                return true;
+                if (filename.endsWith('.png') && size < 50000) return false;
+                matchCount++;
+                return matchCount === 2; // skip first match (banner), take second
             });
 
             if (!candidate) {
