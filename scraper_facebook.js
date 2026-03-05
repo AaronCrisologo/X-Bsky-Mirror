@@ -173,8 +173,63 @@ async function getLatestFacebookImage() {
         }
 
         if (!postImageInfo_resolved) {
-            // Network capture fallback: first captured image over 10KB in arrival order
+            // Network capture fallback: use timestamp to identify the latest post,
+            // then check only that post for video before selecting an image.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
+
+            // Step 1: identify the latest post by timestamp
+            const fallbackVideoData = await page.evaluate(() => {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+
+                const dated = articles.map((article, idx) => {
+                    const timeEl = article.querySelector('time[datetime]');
+                    const datetime = timeEl ? timeEl.getAttribute('datetime') : null;
+                    const tsRaw = datetime ? new Date(datetime).getTime() : NaN;
+                    const ts = isNaN(tsRaw) ? 0 : tsRaw;
+                    return { datetime, ts, idx };
+                });
+
+                const validDated = dated.filter(item => item.ts > 0);
+                validDated.sort((a, b) => b.ts - a.ts);
+
+                const winnerIdx = validDated.length > 0 ? validDated[0].idx : -1;
+                const root = winnerIdx >= 0 ? articles[winnerIdx] : document.body;
+
+                const checks = {
+                    video:       !!root.querySelector('video'),
+                    videoId:     !!root.querySelector('[data-video-id]'),
+                    videoLink:   !!root.querySelector('a[href*="/videos/"]'),
+                    reelLink:    !!root.querySelector('a[href*="/reel/"]'),
+                    playVideo:   !!root.querySelector('[aria-label="Play video"]'),
+                    play:        !!root.querySelector('[aria-label="Play"]'),
+                    inlineVideo: !!root.querySelector('[data-sigil="inlineVideo"]'),
+                };
+
+                return { totalArticles: articles.length, dated, validDated, winnerIdx, checks };
+            });
+
+            // Log what was found
+            process.stderr.write(`fallbackVideoCheck: ${fallbackVideoData.totalArticles} total articles, ${fallbackVideoData.validDated.length} with valid timestamps\n`);
+            fallbackVideoData.dated.forEach(item => {
+                process.stderr.write(`  article[${item.idx}] datetime="${item.datetime}" ts=${item.ts === 0 ? 'INVALID' : item.ts}\n`);
+            });
+            if (fallbackVideoData.winnerIdx === -1) {
+                process.stderr.write('fallbackVideoCheck: no dated articles found, fell back to document.body\n');
+            } else {
+                const winner = fallbackVideoData.validDated[0];
+                process.stderr.write(`fallbackVideoCheck: latest article is index ${winner.idx} at "${winner.datetime}"\n`);
+            }
+            process.stderr.write(`fallbackVideoCheck signals: ${JSON.stringify(fallbackVideoData.checks)}\n`);
+
+            const fallbackVideoCheck = Object.values(fallbackVideoData.checks).some(Boolean);
+
+            if (fallbackVideoCheck) {
+                process.stderr.write('Latest post appears to be a video. Skipping.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+
+            // Step 2: find the best image from network capture
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
@@ -187,25 +242,6 @@ async function getLatestFacebookImage() {
 
             if (!candidate) {
                 process.stderr.write('No suitable post image found on Facebook page.\n');
-                console.log(JSON.stringify({ error: 'no_image_found' }));
-                return;
-            }
-
-            // Check if the latest post is a video before committing
-            const fallbackVideoCheck = await page.evaluate(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                const root = articles[0] || document.body;
-                return (
-                    root.querySelector('video') !== null ||
-                    root.querySelector('[data-video-id]') !== null ||
-                    root.querySelector('a[href*="/videos/"]') !== null ||
-                    root.querySelector('a[href*="/reel/"]') !== null ||
-                    root.querySelector('[aria-label="Play video"]') !== null
-                );
-            });
-
-            if (fallbackVideoCheck) {
-                process.stderr.write('Latest post appears to be a video. Skipping.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
