@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FortniteGame';
+const FB_PAGE_URL = 'https://www.facebook.com/NVIDIA';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
