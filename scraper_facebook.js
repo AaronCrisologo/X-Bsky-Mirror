@@ -91,6 +91,7 @@ async function getLatestFacebookImage() {
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
+            
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
             let latestPost = null;
@@ -173,8 +174,131 @@ async function getLatestFacebookImage() {
         }
 
         if (!postImageInfo_resolved) {
-            // Network capture fallback: first captured image over 10KB in arrival order
+            // Network capture fallback: hover each article's post-level timestamp link to get the
+            // exact datetime from Facebook's tooltip, sort by it, then check the latest for video.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
+
+            // Step 1: mark each article's post-level timestamp <a> with a probe attribute
+            // so Puppeteer can hover it. Post-level = aria-label matches text, no comment_id in href.
+            const articleCount = await page.evaluate(() => {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                let marked = 0;
+                articles.forEach((article, idx) => {
+                    const links = Array.from(article.querySelectorAll('a[aria-label]'));
+                    for (const a of links) {
+                        const aria = a.getAttribute('aria-label') || '';
+                        const text = (a.innerText || '').trim();
+                        const href = a.href || '';
+                        if (aria === text && !href.includes('comment_id') && /^\d+\s*[smhdw]$/i.test(text)) {
+                            a.setAttribute('data-ts-probe', `article-${idx}`);
+                            marked++;
+                            break;
+                        }
+                    }
+                });
+                return articles.length;
+            });
+
+            // Step 2: hover each marked link and read the exact datetime from the tooltip
+            const articleTimestamps = {}; // idx -> exact ts (ms) or 0
+
+            for (let i = 0; i < articleCount; i++) {
+                const selector = `[data-ts-probe="article-${i}"]`;
+                const exists = await page.evaluate((sel) => !!document.querySelector(sel), selector);
+                if (!exists) {
+                    process.stderr.write(`article[${i}]: no post-level timestamp link\n`);
+                    articleTimestamps[i] = 0;
+                    continue;
+                }
+
+                try {
+                    await page.hover(selector);
+                    await new Promise(r => setTimeout(r, 600));
+
+                    const tooltipTs = await page.evaluate(() => {
+                        const tooltip = document.querySelector('[role="tooltip"]');
+                        if (!tooltip) return null;
+                        const text = tooltip.innerText.trim();
+                        // e.g. "Thursday, March 5, 2026 at 4:45 AM"
+                        const ts = new Date(text.replace(' at ', ' ')).getTime();
+                        return isNaN(ts) ? null : { text, ts };
+                    });
+
+                    if (tooltipTs) {
+                        process.stderr.write(`article[${i}]: tooltip="${tooltipTs.text}" ts=${tooltipTs.ts}\n`);
+                        articleTimestamps[i] = tooltipTs.ts;
+                    } else {
+                        process.stderr.write(`article[${i}]: tooltip not found or unparseable, using relative fallback\n`);
+                        // Fall back to relative time approximation
+                        const relTs = await page.evaluate((sel) => {
+                            const a = document.querySelector(sel);
+                            if (!a) return 0;
+                            const text = (a.innerText || '').trim();
+                            const m = text.match(/^(\d+)\s*(s|m|h|d|w)$/i);
+                            if (!m) return 0;
+                            const val = parseInt(m[1]);
+                            const unit = m[2].toLowerCase();
+                            const ms = unit === 's' ? val * 1000
+                                       : unit === 'm' ? val * 60000
+                                       : unit === 'h' ? val * 3600000
+                                       : unit === 'd' ? val * 86400000
+                                       : val * 604800000;
+                            return Date.now() - ms;
+                        }, selector);
+                        articleTimestamps[i] = relTs;
+                    }
+                } catch (e) {
+                    process.stderr.write(`article[${i}]: hover error — ${e.message}\n`);
+                    articleTimestamps[i] = 0;
+                }
+            }
+
+            // Step 3: pick the article with the highest (most recent) timestamp
+            let winnerIdx = -1;
+            let winnerTs = 0;
+            for (let i = 0; i < articleCount; i++) {
+                if (articleTimestamps[i] > winnerTs) {
+                    winnerTs = articleTimestamps[i];
+                    winnerIdx = i;
+                }
+            }
+            // If no timestamps found at all, fall back to DOM order
+            if (winnerIdx === -1 && articleCount > 0) {
+                winnerIdx = 0;
+                process.stderr.write('No timestamps resolved — falling back to article[0] (DOM order)\n');
+            }
+            process.stderr.write(`Latest article: index ${winnerIdx}\n`);
+
+            // Step 4: check that article for video signals
+            const videoCheck = await page.evaluate((idx) => {
+                const root = document.querySelectorAll('[role="article"]')[idx];
+                if (!root) return { noArticle: true };
+                return {
+                    video:       !!root.querySelector('video'),
+                    videoId:     !!root.querySelector('[data-video-id]'),
+                    videoLink:   !!root.querySelector('a[href*="/videos/"]'),
+                    reelLink:    !!root.querySelector('a[href*="/reel/"]'),
+                    playVideo:   !!root.querySelector('[aria-label="Play video"]'),
+                    play:        !!root.querySelector('[aria-label="Play"]'),
+                    inlineVideo: !!root.querySelector('[data-sigil="inlineVideo"]'),
+                };
+            }, winnerIdx);
+
+            process.stderr.write(`Video signals: ${JSON.stringify(videoCheck)}\n`);
+
+            if (videoCheck.noArticle) {
+                process.stderr.write('Article not found — bailing.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+
+            if (Object.values(videoCheck).some(Boolean)) {
+                process.stderr.write('Latest post is a video. Skipping.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+
+            // Step 5: find the best image from network capture
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
@@ -187,25 +311,6 @@ async function getLatestFacebookImage() {
 
             if (!candidate) {
                 process.stderr.write('No suitable post image found on Facebook page.\n');
-                console.log(JSON.stringify({ error: 'no_image_found' }));
-                return;
-            }
-
-            // Check if the latest post is a video before committing
-            const fallbackVideoCheck = await page.evaluate(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                const root = articles[0] || document.body;
-                return (
-                    root.querySelector('video') !== null ||
-                    root.querySelector('[data-video-id]') !== null ||
-                    root.querySelector('a[href*="/videos/"]') !== null ||
-                    root.querySelector('a[href*="/reel/"]') !== null ||
-                    root.querySelector('[aria-label="Play video"]') !== null
-                );
-            });
-
-            if (fallbackVideoCheck) {
-                process.stderr.write('Latest post appears to be a video. Skipping.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }

@@ -173,7 +173,7 @@ def main():
         print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Simulation...")
         
         tweet_data = {
-            'text': """Testing:
+            'text': """This is a test:
             ★5 (SSR) Andromeda
             "I am totally a god...Revere me. Fear me, and make sure you don't overwork me...me...me...(Echo)"
             fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0204_sf_pu2%2F
