@@ -177,7 +177,19 @@ async function getLatestFacebookImage() {
             // then check only that post for video before selecting an image.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
 
-            // Step 1: identify the latest post by timestamp
+            // Step 1: wait for at least one time[datetime] to be rendered by Facebook
+            process.stderr.write('Waiting for time[datetime] attributes to render...\n');
+            try {
+                await page.waitForFunction(
+                    () => document.querySelector('time[datetime]') !== null,
+                    { timeout: 8000 }
+                );
+                process.stderr.write('time[datetime] found.\n');
+            } catch (_) {
+                process.stderr.write('Timed out waiting for time[datetime] — will use DOM order fallback.\n');
+            }
+
+            // Step 2: identify the latest post by timestamp, fall back to articles[0] if none found
             const fallbackVideoData = await page.evaluate(() => {
                 const articles = Array.from(document.querySelectorAll('[role="article"]'));
 
@@ -192,8 +204,10 @@ async function getLatestFacebookImage() {
                 const validDated = dated.filter(item => item.ts > 0);
                 validDated.sort((a, b) => b.ts - a.ts);
 
-                const winnerIdx = validDated.length > 0 ? validDated[0].idx : -1;
-                const root = winnerIdx >= 0 ? articles[winnerIdx] : document.body;
+                // If timestamps are available use the newest; otherwise trust DOM order (index 0 = latest in feed)
+                const winnerIdx = validDated.length > 0 ? validDated[0].idx : (articles.length > 0 ? 0 : -1);
+                const root = winnerIdx >= 0 ? articles[winnerIdx] : null;
+                if (!root) return { totalArticles: articles.length, dated, validDated, winnerIdx, checks: {}, noArticles: true };
 
                 const checks = {
                     video:       !!root.querySelector('video'),
@@ -213,8 +227,12 @@ async function getLatestFacebookImage() {
             fallbackVideoData.dated.forEach(item => {
                 process.stderr.write(`  article[${item.idx}] datetime="${item.datetime}" ts=${item.ts === 0 ? 'INVALID' : item.ts}\n`);
             });
-            if (fallbackVideoData.winnerIdx === -1) {
-                process.stderr.write('fallbackVideoCheck: no dated articles found, fell back to document.body\n');
+            if (fallbackVideoData.noArticles) {
+                process.stderr.write('fallbackVideoCheck: no articles found at all — cannot check for video, bailing.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            } else if (fallbackVideoData.validDated.length === 0) {
+                process.stderr.write(`fallbackVideoCheck: no valid timestamps found — using DOM order, checking article[${fallbackVideoData.winnerIdx}]\n`);
             } else {
                 const winner = fallbackVideoData.validDated[0];
                 process.stderr.write(`fallbackVideoCheck: latest article is index ${winner.idx} at "${winner.datetime}"\n`);
