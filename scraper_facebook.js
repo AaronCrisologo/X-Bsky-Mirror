@@ -91,6 +91,9 @@ async function getLatestFacebookImage() {
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
+            // TEMP: force fallback path for diagnostics — remove after
+            if (true) return null;
+
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
             let latestPost = null;
@@ -176,6 +179,108 @@ async function getLatestFacebookImage() {
             // Network capture fallback: identify the latest post by timestamp, check for video,
             // then select an image from network capture.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
+
+            // Diagnostic: dump time-related DOM content from each article
+            const timeDiagnostics = await page.evaluate(() => {
+                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                return articles.map((article, idx) => {
+                    const timeEls = Array.from(article.querySelectorAll('time')).map(t => ({
+                        datetime:  t.getAttribute('datetime'),
+                        title:     t.getAttribute('title'),
+                        ariaLabel: t.getAttribute('aria-label'),
+                        text:      t.innerText,
+                        outerHTML: t.outerHTML.slice(0, 300),
+                    }));
+                    const timestampLinks = Array.from(article.querySelectorAll('a')).filter(a => {
+                        const t = (a.innerText || '').trim();
+                        return /^(\d+[smhdw]|just now|yesterday|\w+ \d+)/i.test(t);
+                    }).map(a => ({
+                        text:      a.innerText.trim(),
+                        href:      a.href,
+                        ariaLabel: a.getAttribute('aria-label'),
+                        title:     a.getAttribute('title'),
+                    }));
+                    const dateAttrs = Array.from(article.querySelectorAll('[title],[aria-label]')).filter(el => {
+                        const val = el.getAttribute('title') || el.getAttribute('aria-label') || '';
+                        return /\b(january|february|march|april|may|june|july|august|september|october|november|december|\d{4}|\d+:\d+\s*(am|pm))/i.test(val);
+                    }).map(el => ({
+                        tag:       el.tagName,
+                        title:     el.getAttribute('title'),
+                        ariaLabel: el.getAttribute('aria-label'),
+                        text:      (el.innerText || '').trim().slice(0, 80),
+                    }));
+                    return { idx, timeEls, timestampLinks, dateAttrs };
+                });
+            });
+
+            timeDiagnostics.forEach(({ idx, timeEls, timestampLinks, dateAttrs }) => {
+                process.stderr.write(`\n--- article[${idx}] ---\n`);
+                process.stderr.write(`  <time> elements (${timeEls.length}):\n`);
+                timeEls.forEach(t => process.stderr.write(`    datetime="${t.datetime}" title="${t.title}" aria="${t.ariaLabel}" text="${t.text}" html=${t.outerHTML}\n`));
+                process.stderr.write(`  timestamp-like <a> tags (${timestampLinks.length}):\n`);
+                timestampLinks.forEach(a => process.stderr.write(`    text="${a.text}" href="${a.href}" title="${a.title}" aria="${a.ariaLabel}"\n`));
+                process.stderr.write(`  date-like title/aria-label attrs (${dateAttrs.length}):\n`);
+                dateAttrs.forEach(d => process.stderr.write(`    <${d.tag}> title="${d.title}" aria="${d.ariaLabel}" text="${d.text}"\n`));
+            });
+
+            // Hover each article's post-level timestamp link and capture the tooltip
+            process.stderr.write('\n--- Hover tooltip diagnostics ---\n');
+            const articleCount = await page.evaluate(() => document.querySelectorAll('[role="article"]').length);
+            for (let i = 0; i < articleCount; i++) {
+                // Find the post-level timestamp <a> for this article:
+                // aria-label === innerText, no comment_id in href
+                const tsSelector = await page.evaluate((idx) => {
+                    const article = document.querySelectorAll('[role="article"]')[idx];
+                    if (!article) return null;
+                    const links = Array.from(article.querySelectorAll('a[aria-label]'));
+                    for (const a of links) {
+                        const aria = a.getAttribute('aria-label') || '';
+                        const text = (a.innerText || '').trim();
+                        const href = a.href || '';
+                        if (aria === text && !href.includes('comment_id') && /^\d+\s*[smhdw]$/i.test(text)) {
+                            // Give it a unique marker so we can select it from Puppeteer
+                            a.setAttribute('data-ts-probe', `article-${idx}`);
+                            return `[data-ts-probe="article-${idx}"]`;
+                        }
+                    }
+                    return null;
+                }, i);
+
+                if (!tsSelector) {
+                    process.stderr.write(`  article[${i}]: no post-level timestamp link found\n`);
+                    continue;
+                }
+
+                try {
+                    await page.hover(tsSelector);
+                    await new Promise(r => setTimeout(r, 800));
+
+                    const tooltipText = await page.evaluate(() => {
+                        // Facebook injects tooltips as role="tooltip" or specific class patterns
+                        const tooltip = document.querySelector('[role="tooltip"]');
+                        if (tooltip) return { role: 'tooltip', text: tooltip.innerText.trim(), outerHTML: tooltip.outerHTML.slice(0, 300) };
+
+                        // Fallback: any newly visible element with a date-like string
+                        const all = Array.from(document.querySelectorAll('[data-visualcompletion="ignore-dynamic"]'));
+                        for (const el of all) {
+                            const t = (el.innerText || '').trim();
+                            if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)/i.test(t)) {
+                                return { role: 'dynamic', text: t, outerHTML: el.outerHTML.slice(0, 300) };
+                            }
+                        }
+                        return null;
+                    });
+
+                    if (tooltipText) {
+                        process.stderr.write(`  article[${i}] tooltip: role="${tooltipText.role}" text="${tooltipText.text}" html=${tooltipText.outerHTML}\n`);
+                    } else {
+                        process.stderr.write(`  article[${i}] tooltip: nothing found after hover\n`);
+                    }
+                } catch (e) {
+                    process.stderr.write(`  article[${i}] hover error: ${e.message}\n`);
+                }
+            }
+            process.stderr.write('--- End hover diagnostics ---\n\n');
 
             const fallbackVideoData = await page.evaluate(() => {
                 const articles = Array.from(document.querySelectorAll('[role="article"]'));
