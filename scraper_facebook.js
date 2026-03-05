@@ -91,9 +91,6 @@ async function getLatestFacebookImage() {
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
-            // TEMP: force fallback path for diagnostics — remove after
-            if (true) return null;
-
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
             let latestPost = null;
@@ -176,59 +173,9 @@ async function getLatestFacebookImage() {
         }
 
         if (!postImageInfo_resolved) {
-            // Network capture fallback: check article[0] (always the latest post in DOM order)
-            // for video signals, then select an image from network capture.
+            // Network capture fallback: identify the latest post by timestamp, check for video,
+            // then select an image from network capture.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
-
-            // Diagnostic: dump everything time-related from each article so we can
-            // figure out how Facebook actually renders timestamps in this environment.
-            const timeDiagnostics = await page.evaluate(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                return articles.map((article, idx) => {
-                    // All <time> elements and their attributes + text
-                    const timeEls = Array.from(article.querySelectorAll('time')).map(t => ({
-                        datetime:  t.getAttribute('datetime'),
-                        title:     t.getAttribute('title'),
-                        ariaLabel: t.getAttribute('aria-label'),
-                        text:      t.innerText,
-                        outerHTML: t.outerHTML.slice(0, 300),
-                    }));
-
-                    // All <a> tags whose text looks like a timestamp ("33m", "2h", "March 5")
-                    const timestampLinks = Array.from(article.querySelectorAll('a')).filter(a => {
-                        const t = (a.innerText || '').trim();
-                        return /^(\d+[mhd]|just now|yesterday|\w+ \d+)/i.test(t);
-                    }).map(a => ({
-                        text:      a.innerText.trim(),
-                        href:      a.href,
-                        ariaLabel: a.getAttribute('aria-label'),
-                        title:     a.getAttribute('title'),
-                    }));
-
-                    // Any element with a title or aria-label that looks like a date
-                    const dateAttrs = Array.from(article.querySelectorAll('[title],[aria-label]')).filter(el => {
-                        const val = el.getAttribute('title') || el.getAttribute('aria-label') || '';
-                        return /\b(january|february|march|april|may|june|july|august|september|october|november|december|\d{4}|\d+:\d+\s*(am|pm))/i.test(val);
-                    }).map(el => ({
-                        tag:       el.tagName,
-                        title:     el.getAttribute('title'),
-                        ariaLabel: el.getAttribute('aria-label'),
-                        text:      (el.innerText || '').trim().slice(0, 80),
-                    }));
-
-                    return { idx, timeEls, timestampLinks, dateAttrs };
-                });
-            });
-
-            timeDiagnostics.forEach(({ idx, timeEls, timestampLinks, dateAttrs }) => {
-                process.stderr.write(`\n--- article[${idx}] ---\n`);
-                process.stderr.write(`  <time> elements (${timeEls.length}):\n`);
-                timeEls.forEach(t => process.stderr.write(`    datetime="${t.datetime}" title="${t.title}" aria="${t.ariaLabel}" text="${t.text}" html=${t.outerHTML}\n`));
-                process.stderr.write(`  timestamp-like <a> tags (${timestampLinks.length}):\n`);
-                timestampLinks.forEach(a => process.stderr.write(`    text="${a.text}" href="${a.href}" title="${a.title}" aria="${a.ariaLabel}"\n`));
-                process.stderr.write(`  date-like title/aria-label attrs (${dateAttrs.length}):\n`);
-                dateAttrs.forEach(d => process.stderr.write(`    <${d.tag}> title="${d.title}" aria="${d.ariaLabel}" text="${d.text}"\n`));
-            });
 
             const fallbackVideoData = await page.evaluate(() => {
                 const articles = Array.from(document.querySelectorAll('[role="article"]'));
