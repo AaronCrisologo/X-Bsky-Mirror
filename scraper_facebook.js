@@ -233,10 +233,46 @@ async function getLatestFacebookImage() {
             const fallbackVideoData = await page.evaluate(() => {
                 const articles = Array.from(document.querySelectorAll('[role="article"]'));
 
-                // TODO: replace with real timestamp selector once diagnostics reveal the pattern
-                const winnerIdx = articles.length > 0 ? 0 : -1;
+                // Find each article's post timestamp via the pattern discovered in diagnostics:
+                // - A timestamp <a> tag whose aria-label equals its text (e.g. aria="1h", text="1h")
+                // - AND whose href does NOT contain comment_id (which would make it a comment timestamp)
+                const relativeToMs = (text) => {
+                    const m = text.trim().match(/^(\d+)\s*(s|m|h|d|w)$/i);
+                    if (!m) return 0;
+                    const val = parseInt(m[1]);
+                    const unit = m[2].toLowerCase();
+                    const ms = unit === 's' ? val * 1000
+                               : unit === 'm' ? val * 60000
+                               : unit === 'h' ? val * 3600000
+                               : unit === 'd' ? val * 86400000
+                               : val * 604800000; // w
+                    return Date.now() - ms;
+                };
+
+                const dated = articles.map((article, idx) => {
+                    const links = Array.from(article.querySelectorAll('a[aria-label]'));
+                    let bestTs = 0;
+                    let bestLabel = null;
+                    for (const a of links) {
+                        const aria = a.getAttribute('aria-label') || '';
+                        const text = (a.innerText || '').trim();
+                        const href = a.href || '';
+                        // Must be a post-level timestamp: aria matches text, no comment_id in href
+                        if (aria === text && !href.includes('comment_id') && /^\d+\s*[smhdw]$/i.test(text)) {
+                            const ts = relativeToMs(text);
+                            if (ts > bestTs) { bestTs = ts; bestLabel = text; }
+                        }
+                    }
+                    return { idx, ts: bestTs, label: bestLabel };
+                });
+
+                const validDated = dated.filter(d => d.ts > 0);
+                validDated.sort((a, b) => b.ts - a.ts);
+
+                // Use newest timestamped article; fall back to article[0] if none found
+                const winnerIdx = validDated.length > 0 ? validDated[0].idx : (articles.length > 0 ? 0 : -1);
                 const root = winnerIdx >= 0 ? articles[winnerIdx] : null;
-                if (!root) return { totalArticles: articles.length, winnerIdx, checks: {}, noArticles: true };
+                if (!root) return { totalArticles: articles.length, dated, validDated, winnerIdx, checks: {}, noArticles: true };
 
                 const checks = {
                     video:       !!root.querySelector('video'),
@@ -248,15 +284,24 @@ async function getLatestFacebookImage() {
                     inlineVideo: !!root.querySelector('[data-sigil="inlineVideo"]'),
                 };
 
-                return { totalArticles: articles.length, winnerIdx, checks };
+                return { totalArticles: articles.length, dated, validDated, winnerIdx, checks };
             });
 
             // Log what was found
-            process.stderr.write(`fallbackVideoCheck: ${fallbackVideoData.totalArticles} total articles, checking article[${fallbackVideoData.winnerIdx}] (DOM order)\n`);
+            process.stderr.write(`fallbackVideoCheck: ${fallbackVideoData.totalArticles} total articles, ${fallbackVideoData.validDated.length} with timestamps\n`);
+            fallbackVideoData.dated.forEach(d => {
+                process.stderr.write(`  article[${d.idx}] label="${d.label}" ts=${d.ts === 0 ? 'NONE' : d.ts}\n`);
+            });
             if (fallbackVideoData.noArticles) {
-                process.stderr.write('fallbackVideoCheck: no articles found at all — cannot check for video, bailing.\n');
+                process.stderr.write('fallbackVideoCheck: no articles found at all — bailing.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
+            }
+            if (fallbackVideoData.validDated.length > 0) {
+                const w = fallbackVideoData.validDated[0];
+                process.stderr.write(`fallbackVideoCheck: latest article is index ${w.idx} ("${w.label}")\n`);
+            } else {
+                process.stderr.write(`fallbackVideoCheck: no timestamps found — falling back to article[${fallbackVideoData.winnerIdx}] (DOM order)\n`);
             }
             process.stderr.write(`fallbackVideoCheck signals: ${JSON.stringify(fallbackVideoData.checks)}\n`);
 
