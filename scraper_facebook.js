@@ -91,9 +91,6 @@ async function getLatestFacebookImage() {
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
-            // TEMP: force fallback path for diagnostics — remove after
-            if (true) return null;
-
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
             let latestPost = null;
@@ -176,157 +173,106 @@ async function getLatestFacebookImage() {
         }
 
         if (!postImageInfo_resolved) {
-            // Network capture fallback: identify the latest post by timestamp, check for video,
-            // then select an image from network capture.
+            // Network capture fallback: hover each article's post-level timestamp link to get the
+            // exact datetime from Facebook's tooltip, sort by it, then check the latest for video.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
 
-            // Diagnostic: dump time-related DOM content from each article
-            const timeDiagnostics = await page.evaluate(() => {
+            // Step 1: mark each article's post-level timestamp <a> with a probe attribute
+            // so Puppeteer can hover it. Post-level = aria-label matches text, no comment_id in href.
+            const articleCount = await page.evaluate(() => {
                 const articles = Array.from(document.querySelectorAll('[role="article"]'));
-                return articles.map((article, idx) => {
-                    const timeEls = Array.from(article.querySelectorAll('time')).map(t => ({
-                        datetime:  t.getAttribute('datetime'),
-                        title:     t.getAttribute('title'),
-                        ariaLabel: t.getAttribute('aria-label'),
-                        text:      t.innerText,
-                        outerHTML: t.outerHTML.slice(0, 300),
-                    }));
-                    const timestampLinks = Array.from(article.querySelectorAll('a')).filter(a => {
-                        const t = (a.innerText || '').trim();
-                        return /^(\d+[smhdw]|just now|yesterday|\w+ \d+)/i.test(t);
-                    }).map(a => ({
-                        text:      a.innerText.trim(),
-                        href:      a.href,
-                        ariaLabel: a.getAttribute('aria-label'),
-                        title:     a.getAttribute('title'),
-                    }));
-                    const dateAttrs = Array.from(article.querySelectorAll('[title],[aria-label]')).filter(el => {
-                        const val = el.getAttribute('title') || el.getAttribute('aria-label') || '';
-                        return /\b(january|february|march|april|may|june|july|august|september|october|november|december|\d{4}|\d+:\d+\s*(am|pm))/i.test(val);
-                    }).map(el => ({
-                        tag:       el.tagName,
-                        title:     el.getAttribute('title'),
-                        ariaLabel: el.getAttribute('aria-label'),
-                        text:      (el.innerText || '').trim().slice(0, 80),
-                    }));
-                    return { idx, timeEls, timestampLinks, dateAttrs };
-                });
-            });
-
-            timeDiagnostics.forEach(({ idx, timeEls, timestampLinks, dateAttrs }) => {
-                process.stderr.write(`\n--- article[${idx}] ---\n`);
-                process.stderr.write(`  <time> elements (${timeEls.length}):\n`);
-                timeEls.forEach(t => process.stderr.write(`    datetime="${t.datetime}" title="${t.title}" aria="${t.ariaLabel}" text="${t.text}" html=${t.outerHTML}\n`));
-                process.stderr.write(`  timestamp-like <a> tags (${timestampLinks.length}):\n`);
-                timestampLinks.forEach(a => process.stderr.write(`    text="${a.text}" href="${a.href}" title="${a.title}" aria="${a.ariaLabel}"\n`));
-                process.stderr.write(`  date-like title/aria-label attrs (${dateAttrs.length}):\n`);
-                dateAttrs.forEach(d => process.stderr.write(`    <${d.tag}> title="${d.title}" aria="${d.ariaLabel}" text="${d.text}"\n`));
-            });
-
-            // Hover each article's post-level timestamp link and capture the tooltip
-            process.stderr.write('\n--- Hover tooltip diagnostics ---\n');
-            const articleCount = await page.evaluate(() => document.querySelectorAll('[role="article"]').length);
-            for (let i = 0; i < articleCount; i++) {
-                // Find the post-level timestamp <a> for this article:
-                // aria-label === innerText, no comment_id in href
-                const tsSelector = await page.evaluate((idx) => {
-                    const article = document.querySelectorAll('[role="article"]')[idx];
-                    if (!article) return null;
+                let marked = 0;
+                articles.forEach((article, idx) => {
                     const links = Array.from(article.querySelectorAll('a[aria-label]'));
                     for (const a of links) {
                         const aria = a.getAttribute('aria-label') || '';
                         const text = (a.innerText || '').trim();
                         const href = a.href || '';
                         if (aria === text && !href.includes('comment_id') && /^\d+\s*[smhdw]$/i.test(text)) {
-                            // Give it a unique marker so we can select it from Puppeteer
                             a.setAttribute('data-ts-probe', `article-${idx}`);
-                            return `[data-ts-probe="article-${idx}"]`;
+                            marked++;
+                            break;
                         }
                     }
-                    return null;
-                }, i);
+                });
+                return articles.length;
+            });
 
-                if (!tsSelector) {
-                    process.stderr.write(`  article[${i}]: no post-level timestamp link found\n`);
+            // Step 2: hover each marked link and read the exact datetime from the tooltip
+            const articleTimestamps = {}; // idx -> exact ts (ms) or 0
+
+            for (let i = 0; i < articleCount; i++) {
+                const selector = `[data-ts-probe="article-${i}"]`;
+                const exists = await page.evaluate((sel) => !!document.querySelector(sel), selector);
+                if (!exists) {
+                    process.stderr.write(`article[${i}]: no post-level timestamp link\n`);
+                    articleTimestamps[i] = 0;
                     continue;
                 }
 
                 try {
-                    await page.hover(tsSelector);
-                    await new Promise(r => setTimeout(r, 800));
+                    await page.hover(selector);
+                    await new Promise(r => setTimeout(r, 600));
 
-                    const tooltipText = await page.evaluate(() => {
-                        // Facebook injects tooltips as role="tooltip" or specific class patterns
+                    const tooltipTs = await page.evaluate(() => {
                         const tooltip = document.querySelector('[role="tooltip"]');
-                        if (tooltip) return { role: 'tooltip', text: tooltip.innerText.trim(), outerHTML: tooltip.outerHTML.slice(0, 300) };
-
-                        // Fallback: any newly visible element with a date-like string
-                        const all = Array.from(document.querySelectorAll('[data-visualcompletion="ignore-dynamic"]'));
-                        for (const el of all) {
-                            const t = (el.innerText || '').trim();
-                            if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)/i.test(t)) {
-                                return { role: 'dynamic', text: t, outerHTML: el.outerHTML.slice(0, 300) };
-                            }
-                        }
-                        return null;
+                        if (!tooltip) return null;
+                        const text = tooltip.innerText.trim();
+                        // e.g. "Thursday, March 5, 2026 at 4:45 AM"
+                        const ts = new Date(text.replace(' at ', ' ')).getTime();
+                        return isNaN(ts) ? null : { text, ts };
                     });
 
-                    if (tooltipText) {
-                        process.stderr.write(`  article[${i}] tooltip: role="${tooltipText.role}" text="${tooltipText.text}" html=${tooltipText.outerHTML}\n`);
+                    if (tooltipTs) {
+                        process.stderr.write(`article[${i}]: tooltip="${tooltipTs.text}" ts=${tooltipTs.ts}\n`);
+                        articleTimestamps[i] = tooltipTs.ts;
                     } else {
-                        process.stderr.write(`  article[${i}] tooltip: nothing found after hover\n`);
+                        process.stderr.write(`article[${i}]: tooltip not found or unparseable, using relative fallback\n`);
+                        // Fall back to relative time approximation
+                        const relTs = await page.evaluate((sel) => {
+                            const a = document.querySelector(sel);
+                            if (!a) return 0;
+                            const text = (a.innerText || '').trim();
+                            const m = text.match(/^(\d+)\s*(s|m|h|d|w)$/i);
+                            if (!m) return 0;
+                            const val = parseInt(m[1]);
+                            const unit = m[2].toLowerCase();
+                            const ms = unit === 's' ? val * 1000
+                                       : unit === 'm' ? val * 60000
+                                       : unit === 'h' ? val * 3600000
+                                       : unit === 'd' ? val * 86400000
+                                       : val * 604800000;
+                            return Date.now() - ms;
+                        }, selector);
+                        articleTimestamps[i] = relTs;
                     }
                 } catch (e) {
-                    process.stderr.write(`  article[${i}] hover error: ${e.message}\n`);
+                    process.stderr.write(`article[${i}]: hover error — ${e.message}\n`);
+                    articleTimestamps[i] = 0;
                 }
             }
-            process.stderr.write('--- End hover diagnostics ---\n\n');
 
-            const fallbackVideoData = await page.evaluate(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+            // Step 3: pick the article with the highest (most recent) timestamp
+            let winnerIdx = -1;
+            let winnerTs = 0;
+            for (let i = 0; i < articleCount; i++) {
+                if (articleTimestamps[i] > winnerTs) {
+                    winnerTs = articleTimestamps[i];
+                    winnerIdx = i;
+                }
+            }
+            // If no timestamps found at all, fall back to DOM order
+            if (winnerIdx === -1 && articleCount > 0) {
+                winnerIdx = 0;
+                process.stderr.write('No timestamps resolved — falling back to article[0] (DOM order)\n');
+            }
+            process.stderr.write(`Latest article: index ${winnerIdx}\n`);
 
-                // Find each article's post timestamp via the pattern discovered in diagnostics:
-                // - A timestamp <a> tag whose aria-label equals its text (e.g. aria="1h", text="1h")
-                // - AND whose href does NOT contain comment_id (which would make it a comment timestamp)
-                const relativeToMs = (text) => {
-                    const m = text.trim().match(/^(\d+)\s*(s|m|h|d|w)$/i);
-                    if (!m) return 0;
-                    const val = parseInt(m[1]);
-                    const unit = m[2].toLowerCase();
-                    const ms = unit === 's' ? val * 1000
-                               : unit === 'm' ? val * 60000
-                               : unit === 'h' ? val * 3600000
-                               : unit === 'd' ? val * 86400000
-                               : val * 604800000; // w
-                    return Date.now() - ms;
-                };
-
-                const dated = articles.map((article, idx) => {
-                    const links = Array.from(article.querySelectorAll('a[aria-label]'));
-                    let bestTs = 0;
-                    let bestLabel = null;
-                    for (const a of links) {
-                        const aria = a.getAttribute('aria-label') || '';
-                        const text = (a.innerText || '').trim();
-                        const href = a.href || '';
-                        // Must be a post-level timestamp: aria matches text, no comment_id in href
-                        if (aria === text && !href.includes('comment_id') && /^\d+\s*[smhdw]$/i.test(text)) {
-                            const ts = relativeToMs(text);
-                            if (ts > bestTs) { bestTs = ts; bestLabel = text; }
-                        }
-                    }
-                    return { idx, ts: bestTs, label: bestLabel };
-                });
-
-                const validDated = dated.filter(d => d.ts > 0);
-                validDated.sort((a, b) => b.ts - a.ts);
-
-                // Use newest timestamped article; fall back to article[0] if none found
-                const winnerIdx = validDated.length > 0 ? validDated[0].idx : (articles.length > 0 ? 0 : -1);
-                const root = winnerIdx >= 0 ? articles[winnerIdx] : null;
-                if (!root) return { totalArticles: articles.length, dated, validDated, winnerIdx, checks: {}, noArticles: true };
-
-                const checks = {
+            // Step 4: check that article for video signals
+            const videoCheck = await page.evaluate((idx) => {
+                const root = document.querySelectorAll('[role="article"]')[idx];
+                if (!root) return { noArticle: true };
+                return {
                     video:       !!root.querySelector('video'),
                     videoId:     !!root.querySelector('[data-video-id]'),
                     videoLink:   !!root.querySelector('a[href*="/videos/"]'),
@@ -335,37 +281,23 @@ async function getLatestFacebookImage() {
                     play:        !!root.querySelector('[aria-label="Play"]'),
                     inlineVideo: !!root.querySelector('[data-sigil="inlineVideo"]'),
                 };
+            }, winnerIdx);
 
-                return { totalArticles: articles.length, dated, validDated, winnerIdx, checks };
-            });
+            process.stderr.write(`Video signals: ${JSON.stringify(videoCheck)}\n`);
 
-            // Log what was found
-            process.stderr.write(`fallbackVideoCheck: ${fallbackVideoData.totalArticles} total articles, ${fallbackVideoData.validDated.length} with timestamps\n`);
-            fallbackVideoData.dated.forEach(d => {
-                process.stderr.write(`  article[${d.idx}] label="${d.label}" ts=${d.ts === 0 ? 'NONE' : d.ts}\n`);
-            });
-            if (fallbackVideoData.noArticles) {
-                process.stderr.write('fallbackVideoCheck: no articles found at all — bailing.\n');
-                console.log(JSON.stringify({ error: 'no_image_found' }));
-                return;
-            }
-            if (fallbackVideoData.validDated.length > 0) {
-                const w = fallbackVideoData.validDated[0];
-                process.stderr.write(`fallbackVideoCheck: latest article is index ${w.idx} ("${w.label}")\n`);
-            } else {
-                process.stderr.write(`fallbackVideoCheck: no timestamps found — falling back to article[${fallbackVideoData.winnerIdx}] (DOM order)\n`);
-            }
-            process.stderr.write(`fallbackVideoCheck signals: ${JSON.stringify(fallbackVideoData.checks)}\n`);
-
-            const fallbackVideoCheck = Object.values(fallbackVideoData.checks).some(Boolean);
-
-            if (fallbackVideoCheck) {
-                process.stderr.write('Latest post appears to be a video. Skipping.\n');
+            if (videoCheck.noArticle) {
+                process.stderr.write('Article not found — bailing.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
 
-            // Step 2: find the best image from network capture
+            if (Object.values(videoCheck).some(Boolean)) {
+                process.stderr.write('Latest post is a video. Skipping.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+
+            // Step 5: find the best image from network capture
             let matchCount = 0;
             const candidate = captureOrder.find(filename => {
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
