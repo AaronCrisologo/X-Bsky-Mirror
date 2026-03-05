@@ -10,6 +10,7 @@ TEMP_MANGA_PATH = "temp_manga.jpg"  # Temporary file for downloaded manga
 SERVANTS_MAP = {
     "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber) Pickup Summon"},
     "durga": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
+    "sigurd": {"img": "Sigurd.jpg", "alt": "Sigurd Pickup Summon"},
     "bhima": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
     "bakin": {"img": "bakin.png", "alt": "Kyokutei Bakin Pickup Summon"},
     "suzuka gozen (rider)": {"img": "vacay.jpg", "alt": "Suzuka Gozen (Rider) Pickup Summon"},
