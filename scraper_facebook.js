@@ -7,7 +7,7 @@ const fs = require('fs');
 
 puppeteer.use(StealthPlugin());
 
-const FB_PAGE_URL = 'https://www.facebook.com/FateGO.USA';
+const FB_PAGE_URL = 'https://www.facebook.com/ZZZ.Official.EN';
 const OUTPUT_FILE = 'facebook_img.jpg';
 
 const rawCookies = [
@@ -91,8 +91,6 @@ async function getLatestFacebookImage() {
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
-            // TEMP: force fallback path for diagnostics — remove after
-            if (true) return null;
             
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
