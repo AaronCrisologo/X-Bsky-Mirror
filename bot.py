@@ -183,7 +183,7 @@ def main():
 #FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [],
-            'hasVideo': False
+            'hasVideo': True
         }
     else:
         print(f"\n[{datetime.datetime.now(datetime.timezone.utc)}] Running Production...")
