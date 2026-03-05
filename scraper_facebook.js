@@ -177,34 +177,71 @@ async function getLatestFacebookImage() {
             // then check only that post for video before selecting an image.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
 
-            // Step 1: wait for at least one time[datetime] to be rendered by Facebook
-            process.stderr.write('Waiting for time[datetime] attributes to render...\n');
+            // Step 1: wait for Facebook's time elements to render (they use aria-label, not datetime)
+            process.stderr.write('Waiting for time elements with aria-label to render...\n');
             try {
                 await page.waitForFunction(
-                    () => document.querySelector('time[datetime]') !== null,
+                    () => {
+                        const timeEl = document.querySelector('[role="article"] [aria-label]');
+                        // Look for any element whose aria-label looks like a timestamp
+                        const all = Array.from(document.querySelectorAll('[role="article"] [aria-label]'));
+                        return all.some(el => /\b(january|february|march|april|may|june|july|august|september|october|november|december|\d+[mhd] ago|\d+:\d+)/i.test(el.getAttribute('aria-label')));
+                    },
                     { timeout: 8000 }
                 );
-                process.stderr.write('time[datetime] found.\n');
+                process.stderr.write('Time aria-labels found.\n');
             } catch (_) {
-                process.stderr.write('Timed out waiting for time[datetime] — will use DOM order fallback.\n');
+                process.stderr.write('Timed out waiting for time aria-labels — will use DOM order fallback.\n');
             }
 
-            // Step 2: identify the latest post by timestamp, fall back to articles[0] if none found
+            // Step 2: identify the latest post by timestamp via aria-label, fall back to articles[0]
             const fallbackVideoData = await page.evaluate(() => {
                 const articles = Array.from(document.querySelectorAll('[role="article"]'));
 
+                // Facebook renders timestamps as aria-label on spans/times, e.g. "March 5 at 12:45 PM"
+                const timePattern = /\b(january|february|march|april|may|june|july|august|september|october|november|december)/i;
+                const agoPattern = /^(\d+)\s*(m|h|d)\s*(ago)?$/i;
+
                 const dated = articles.map((article, idx) => {
-                    const timeEl = article.querySelector('time[datetime]');
-                    const datetime = timeEl ? timeEl.getAttribute('datetime') : null;
-                    const tsRaw = datetime ? new Date(datetime).getTime() : NaN;
-                    const ts = isNaN(tsRaw) ? 0 : tsRaw;
-                    return { datetime, ts, idx };
+                    const candidates = Array.from(article.querySelectorAll('[aria-label]'));
+                    let bestDatetime = null;
+                    let bestTs = 0;
+
+                    for (const el of candidates) {
+                        const label = el.getAttribute('aria-label') || '';
+
+                        // "March 5 at 12:45 PM" style
+                        if (timePattern.test(label)) {
+                            const ts = new Date(label).getTime();
+                            if (!isNaN(ts) && ts > bestTs) {
+                                bestTs = ts;
+                                bestDatetime = label;
+                            }
+                        }
+
+                        // "33m", "2h", "1d" relative style — convert to approximate timestamp
+                        const agoMatch = label.match(agoPattern);
+                        if (agoMatch) {
+                            const val = parseInt(agoMatch[1]);
+                            const unit = agoMatch[2].toLowerCase();
+                            const ms = unit === 'm' ? val * 60000
+                                     : unit === 'h' ? val * 3600000
+                                     : val * 86400000;
+                            const ts = Date.now() - ms;
+                            if (ts > bestTs) {
+                                bestTs = ts;
+                                bestDatetime = label;
+                            }
+                        }
+                    }
+
+                    return { datetime: bestDatetime, ts: bestTs, idx };
                 });
 
                 const validDated = dated.filter(item => item.ts > 0);
                 validDated.sort((a, b) => b.ts - a.ts);
 
-                // If timestamps are available use the newest; otherwise trust DOM order (index 0 = latest in feed)
+                // If timestamps found use newest; otherwise trust DOM order (article[0] = top of feed)
                 const winnerIdx = validDated.length > 0 ? validDated[0].idx : (articles.length > 0 ? 0 : -1);
                 const root = winnerIdx >= 0 ? articles[winnerIdx] : null;
                 if (!root) return { totalArticles: articles.length, dated, validDated, winnerIdx, checks: {}, noArticles: true };
