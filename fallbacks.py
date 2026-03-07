@@ -9,6 +9,7 @@ TEMP_MANGA_PATH = "temp_manga.jpg"  # Temporary file for downloaded manga
 # 1. Define your specific keyword-to-image/alt mapping
 SERVANTS_MAP = {
     "medusa (saber)": {"img": "Medusa (Saber).jpg", "alt": "Medusa (Saber) Pickup Summon"},
+    "gilgamesh": {"img": "Gilgamesh.jpg", "alt": "Gilgamesh Pickup Summon"},
     "durga": {"img": "Durga.jpg", "alt": "Durga Pickup Summon"},
     "sigurd": {"img": "Sigurd.jpg", "alt": "Sigurd Pickup Summon"},
     "bhima": {"img": "Bhima.jpg", "alt": "Bhima Pickup Summon"},
