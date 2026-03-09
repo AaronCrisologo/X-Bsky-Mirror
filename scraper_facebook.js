@@ -91,7 +91,6 @@ async function getLatestFacebookImage() {
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
         const postImageInfo = await page.evaluate(() => {
-            
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
             let latestPost = null;
@@ -151,29 +150,23 @@ async function getLatestFacebookImage() {
             return;
         }
 
-        let targetFilename = null;
-        let postImageInfo_resolved = null;
+        // resolvedCandidates: [{filename, src, photoHref}] — populated by pagelet or fallback path
+        let resolvedCandidates = [];
 
         if (postImageInfo && postImageInfo.candidates && postImageInfo.candidates.length > 0) {
-            // Pagelet path: pick largest captured buffer among DOM candidates
-            let bestSrc = null, bestPhotoHref = null, bestSize = 0;
+            // Pagelet path: collect ALL qualifying candidates, sorted by captured buffer size desc
+            const ranked = [];
             for (const { src, photoHref } of postImageInfo.candidates) {
                 const filename = getFilename(src);
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
-                if (size > bestSize) {
-                    bestSize = size;
-                    bestSrc = src;
-                    bestPhotoHref = photoHref;
-                }
+                if (size >= 10000) ranked.push({ filename, src, photoHref, size });
             }
-            if (bestSrc && bestSize >= 10000) {
-                targetFilename = getFilename(bestSrc);
-                postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
-                process.stderr.write(`Pagelet selected: ${targetFilename} (${bestSize} bytes)\n`);
-            }
+            ranked.sort((a, b) => b.size - a.size);
+            resolvedCandidates = ranked.map(({ filename, src, photoHref }) => ({ filename, src, photoHref }));
+            process.stderr.write(`Pagelet candidates: ${resolvedCandidates.map(c => c.filename).join(', ')}\n`);
         }
 
-        if (!postImageInfo_resolved) {
+        if (resolvedCandidates.length === 0) {
             // Network capture fallback: hover each article's post-level timestamp link to get the
             // exact datetime from Facebook's tooltip, sort by it, then check the latest for video.
             process.stderr.write('No pagelet found — using network capture fallback.\n');
@@ -298,124 +291,212 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Step 5: find the best image from network capture
-            let matchCount = 0;
-            const candidate = captureOrder.find(filename => {
-                const size = capturedImages[filename] ? capturedImages[filename].length : 0;
-                if (size < 20000) return false;
-                if (filename.endsWith('.kf')) return false;
-                if (filename.endsWith('.png') && size < 50000) return false;
-                matchCount++;
-                return matchCount === 2; // skip first match (banner), take second
-            });
+            // Step 5: collect ALL images from the winning article, cross-referenced against captures
+            const articleImages = await page.evaluate((idx) => {
+                const article = document.querySelectorAll('[role="article"]')[idx];
+                if (!article) return [];
+                const imgs = Array.from(article.querySelectorAll('img[src*="fbcdn"]'));
+                return imgs
+                    .filter(img =>
+                        !img.src.includes('_s.jpg') &&
+                        !img.src.includes('p40x40') &&
+                        !img.src.includes('p50x50') &&
+                        !img.src.includes('p60x60')
+                    )
+                    .map(img => {
+                        let photoHref = null;
+                        let el = img;
+                        for (let i = 0; i < 12; i++) {
+                            if (!el) break;
+                            if (el.tagName === 'A' && el.href && (
+                                el.href.includes('/photo') ||
+                                el.href.includes('/posts/') ||
+                                el.href.includes('story_fbid') ||
+                                el.href.includes('permalink')
+                            )) { photoHref = el.href; break; }
+                            el = el.parentElement;
+                        }
+                        try {
+                            return { filename: new URL(img.src).pathname.split('/').pop(), src: img.src, photoHref };
+                        } catch(_) { return null; }
+                    })
+                    .filter(Boolean);
+            }, winnerIdx);
 
-            if (!candidate) {
+            process.stderr.write(`Article[${winnerIdx}] DOM images: ${JSON.stringify(articleImages.map(i => i.filename))}\n`);
+
+            // Match DOM images against network captures, sorted by buffer size desc
+            const domMatched = articleImages
+                .map(({ filename, src, photoHref }) => ({
+                    filename, src, photoHref,
+                    size: capturedImages[filename] ? capturedImages[filename].length : 0
+                }))
+                .filter(c => c.size >= 10000 && !c.filename.endsWith('.kf'))
+                .sort((a, b) => b.size - a.size);
+
+            if (domMatched.length > 0) {
+                resolvedCandidates = domMatched.map(({ filename, src, photoHref }) => ({ filename, src, photoHref }));
+                process.stderr.write(`Fallback matched ${resolvedCandidates.length} image(s) from DOM: ${resolvedCandidates.map(c => c.filename).join(', ')}\n`);
+            } else {
+                // DOM images not in captures — fall back to capture order, skip banner, take next
+                process.stderr.write('No DOM-matched images in captures — falling back to capture order.\n');
+                let matchCount = 0;
+                const fallbackFile = captureOrder.find(filename => {
+                    const size = capturedImages[filename] ? capturedImages[filename].length : 0;
+                    if (size < 20000) return false;
+                    if (filename.endsWith('.kf')) return false;
+                    if (filename.endsWith('.png') && size < 50000) return false;
+                    matchCount++;
+                    return matchCount === 2;
+                });
+                if (fallbackFile) resolvedCandidates = [{ filename: fallbackFile, src: null, photoHref: null }];
+            }
+
+            if (resolvedCandidates.length === 0) {
                 process.stderr.write('No suitable post image found on Facebook page.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
-
-            // Try to find a photo href for full-res navigation
-            const fallbackPhotoHref = await page.evaluate((fname) => {
-                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                const img = imgs.find(i => {
-                    try { return new URL(i.src).pathname.split('/').pop() === fname; } catch(_) { return false; }
-                });
-                if (!img) return null;
-                let el = img;
-                for (let i = 0; i < 12; i++) {
-                    if (!el) break;
-                    if (el.tagName === 'A' && el.href && (
-                        el.href.includes('/photo') ||
-                        el.href.includes('/posts/') ||
-                        el.href.includes('story_fbid') ||
-                        el.href.includes('permalink')
-                    )) return el.href;
-                    el = el.parentElement;
-                }
-                return null;
-            }, candidate);
-
-            targetFilename = candidate;
-            postImageInfo_resolved = { src: null, photoHref: fallbackPhotoHref };
-            process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)${fallbackPhotoHref ? ' [photo link found]' : ''}\n`);
         }
 
-        // Phase 3: navigate to photo viewer for full-res, if we have a link
-        let fullResBuffer = null;
-        let fullResBytes = 0;
+        // Phase 3: for a single image, navigate to photo viewer to get full-res.
+        // For multiple images, use feed captures directly (navigating to each viewer
+        // would require multiple page loads and is not worth the added complexity).
+        const outputPaths = [];
 
-        const fullResListener = async (response) => {
-            try {
-                if (response.status() !== 200) return;
-                const url = response.url();
-                if (!url.includes('fbcdn.net')) return;
-                if (url.includes('rsrc.php')) return;
-                const ct = response.headers()['content-type'] || '';
-                if (!ct.startsWith('image/')) return;
-                const filename = getFilename(url);
-                if (filename !== targetFilename) return;
-                const buffer = await response.buffer();
-                if (buffer.length > fullResBytes) {
-                    fullResBuffer = buffer;
-                    fullResBytes = buffer.length;
-                    process.stderr.write(`Viewer loaded ${filename} at ${buffer.length} bytes\n`);
-                }
-            } catch (_) {}
-        };
+        if (resolvedCandidates.length === 1) {
+            const { filename: targetFilename, src: targetSrc, photoHref: targetPhotoHref } = resolvedCandidates[0];
+            let fullResBuffer = null;
+            let fullResBytes = 0;
 
-        page.on('response', fullResListener);
-
-        if (postImageInfo_resolved.photoHref) {
-            process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
-            await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
-        } else if (postImageInfo_resolved.src) {
-            process.stderr.write('Clicking post image to open viewer...\n');
-            await page.evaluate((targetSrc) => {
-                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                const img = imgs.find(i => i.src === targetSrc);
-                if (img) {
-                    let el = img;
-                    for (let i = 0; i < 8; i++) {
-                        if (!el) break;
-                        if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
-                            el.click();
-                            return;
-                        }
-                        el = el.parentElement;
+            // Capture the largest image loaded during viewer navigation.
+            // The full-res file Facebook serves in the viewer has a different filename
+            // than the feed thumbnail, so we don't filter by filename here.
+            const fullResListener = async (response) => {
+                try {
+                    if (response.status() !== 200) return;
+                    const url = response.url();
+                    if (!url.includes('fbcdn.net')) return;
+                    if (url.includes('rsrc.php')) return;
+                    const ct = response.headers()['content-type'] || '';
+                    if (!ct.startsWith('image/')) return;
+                    const buffer = await response.buffer();
+                    if (buffer.length > fullResBytes) {
+                        fullResBuffer = buffer;
+                        fullResBytes = buffer.length;
+                        process.stderr.write(`Viewer candidate: ${getFilename(url)} at ${buffer.length} bytes\n`);
                     }
-                    img.click();
-                }
-            }, postImageInfo_resolved.src);
+                } catch (_) {}
+            };
+            page.on('response', fullResListener);
 
-            try {
-                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-            } catch (_) {
-                // Modal viewer — no navigation event
+            if (targetPhotoHref) {
+                process.stderr.write(`Navigating to photo viewer: ${targetPhotoHref}\n`);
+                await page.goto(targetPhotoHref, { waitUntil: 'networkidle2', timeout: 30000 });
+            } else if (targetSrc) {
+                process.stderr.write('Clicking post image to open viewer...\n');
+                await page.evaluate((src) => {
+                    const img = Array.from(document.querySelectorAll('img[src*="fbcdn"]')).find(i => i.src === src);
+                    if (img) {
+                        let el = img;
+                        for (let i = 0; i < 8; i++) {
+                            if (!el) break;
+                            if (el.tagName === 'A' || el.getAttribute('role') === 'link') { el.click(); return; }
+                            el = el.parentElement;
+                        }
+                        img.click();
+                    }
+                }, targetSrc);
+                try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }); } catch (_) {}
+            } else {
+                process.stderr.write('No photo href available, using feed capture directly.\n');
             }
+
+            await new Promise(r => setTimeout(r, 4000));
+
+            const feedBuffer = capturedImages[targetFilename];
+            const outFile = 'facebook_img_0.jpg';
+            if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
+                process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
+                fs.writeFileSync(outFile, fullResBuffer);
+            } else if (feedBuffer) {
+                process.stderr.write(`Using feed capture: ${feedBuffer.length} bytes\n`);
+                fs.writeFileSync(outFile, feedBuffer);
+            } else {
+                process.stderr.write('No image buffer available.\n');
+                console.log(JSON.stringify({ error: 'download_failed' }));
+                return;
+            }
+            outputPaths.push(outFile);
+
         } else {
-            process.stderr.write('No photo href available, using feed capture directly.\n');
+            // Multiple images — navigate to each photo's viewer to get full-res
+            process.stderr.write(`Fetching full-res for ${resolvedCandidates.length} images.\n`);
+            for (let i = 0; i < resolvedCandidates.length; i++) {
+                const { filename, src, photoHref } = resolvedCandidates[i];
+                const outFile = `facebook_img_${i}.jpg`;
+                let fullResBuffer = null;
+                let fullResBytes = 0;
+
+                // Capture the largest image loaded during viewer navigation.
+                // The full-res file Facebook serves in the viewer has a different filename
+                // than the feed thumbnail, so we don't filter by filename here.
+                const listener = async (response) => {
+                    try {
+                        if (response.status() !== 200) return;
+                        const url = response.url();
+                        if (!url.includes('fbcdn.net')) return;
+                        if (url.includes('rsrc.php')) return;
+                        const ct = response.headers()['content-type'] || '';
+                        if (!ct.startsWith('image/')) return;
+                        const buffer = await response.buffer();
+                        if (buffer.length > fullResBytes) {
+                            fullResBuffer = buffer;
+                            fullResBytes = buffer.length;
+                            process.stderr.write(`[${i}] Viewer candidate: ${getFilename(url)} at ${buffer.length} bytes\n`);
+                        }
+                    } catch (_) {}
+                };
+                page.on('response', listener);
+
+                if (photoHref) {
+                    process.stderr.write(`[${i}] Navigating to photo viewer: ${photoHref}\n`);
+                    await page.goto(photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
+                } else if (src) {
+                    process.stderr.write(`[${i}] No photoHref, using feed capture directly.\n`);
+                } else {
+                    process.stderr.write(`[${i}] No src or photoHref, skipping.\n`);
+                    page.off('response', listener);
+                    continue;
+                }
+
+                await new Promise(r => setTimeout(r, 3000));
+                page.off('response', listener);
+
+                const feedBuffer = capturedImages[filename];
+                const feedBytes = feedBuffer ? feedBuffer.length : 0;
+
+                if (fullResBuffer && fullResBuffer.length > feedBytes) {
+                    process.stderr.write(`[${i}] Using full-res viewer image: ${fullResBuffer.length} bytes (feed was ${feedBytes})\n`);
+                    fs.writeFileSync(outFile, fullResBuffer);
+                } else if (feedBuffer) {
+                    process.stderr.write(`[${i}] Viewer didn't improve on feed capture (viewer=${fullResBytes}, feed=${feedBytes}), using feed.\n`);
+                    fs.writeFileSync(outFile, feedBuffer);
+                } else {
+                    process.stderr.write(`[${i}] No buffer available, skipping.\n`);
+                    continue;
+                }
+                outputPaths.push(outFile);
+            }
         }
 
-        // Give the viewer time to fully load the high-res image
-        await new Promise(r => setTimeout(r, 4000));
-
-        // Pick the best buffer: full-res from viewer if we got it, else feed capture
-        const feedBuffer = capturedImages[targetFilename];
-
-        if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
-            process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
-            fs.writeFileSync(OUTPUT_FILE, fullResBuffer);
-        } else if (feedBuffer) {
-            process.stderr.write(`Viewer didn't load higher res, using feed capture: ${feedBuffer.length} bytes\n`);
-            fs.writeFileSync(OUTPUT_FILE, feedBuffer);
-        } else {
-            process.stderr.write('No image buffer available.\n');
+        if (outputPaths.length === 0) {
+            process.stderr.write('No images written.\n');
             console.log(JSON.stringify({ error: 'download_failed' }));
             return;
         }
 
-        console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
+        console.log(JSON.stringify({ imagePaths: outputPaths }));
 
     } catch (error) {
         process.stderr.write(`Facebook scraper error: ${error.message}\n`);
