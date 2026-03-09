@@ -156,7 +156,7 @@ def is_already_posted(client, new_text):
 
 
 # === CONFIGURATION ===
-SIMULATION_MODE = False  # Set to True to test without running X scraper
+SIMULATION_MODE = True  # Set to True to test without running X scraper
 
 def main():
     client = Client()
