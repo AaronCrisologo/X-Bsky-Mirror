@@ -301,100 +301,74 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Step 5: find the best image from network capture.
-            // Cross-reference with the DOM to exclude cover/banner images — those sit inside
-            // [data-pagelet="ProfileCover"] or are linked from an element with role="img" and
-            // aria-label containing "cover". We also exclude images that are NOT linked to a
-            // photo/post href (i.e. not clickable post images).
-            const postLinkedFilenames = await page.evaluate(() => {
+            // Step 5: find the best image from network capture, scoped to the winning article.
+            // We query images directly inside the latest article element — this naturally excludes
+            // the banner, profile picture, and all other posts regardless of file type.
+            const articleImageInfo = await page.evaluate((idx) => {
+                const article = document.querySelectorAll('[role="article"]')[idx];
+                if (!article) return null;
+
+                const imgs = Array.from(article.querySelectorAll('img[src*="fbcdn"]'));
                 const results = [];
-                document.querySelectorAll('img[src*="fbcdn"]').forEach(img => {
-                    // Skip images inside known cover/profile pagelets
-                    const cover = img.closest('[data-pagelet="ProfileCover"], [data-pagelet="ProfileActions"], [data-pagelet="ProfileTilesFeed"]');
-                    if (cover) return;
-                    // Must have an ancestor linking to a photo or post,
-                    // BUT exclude cover-photo album links (set=a.) and profile picture links
+
+                for (const img of imgs) {
+                    // Skip tiny avatars/icons
+                    if (img.naturalWidth > 0 && img.naturalWidth < 100) continue;
+                    if (img.width > 0 && img.width < 100) continue;
+
+                    let photoHref = null;
                     let el = img.parentElement;
                     for (let i = 0; i < 15; i++) {
                         if (!el) break;
-                        if (el.tagName === 'A' && el.href) {
-                            const href = el.href;
-                            // Exclude cover/profile album links
-                            if (href.includes('set=a.')) break;
-                            if (href.includes('/photo') && href.includes('profile_id')) break;
-                            if (
-                                href.includes('/photo') ||
-                                href.includes('/posts/') ||
-                                href.includes('story_fbid') ||
-                                href.includes('permalink')
-                            ) {
-                                try { results.push(new URL(img.src).pathname.split('/').pop()); }
-                                catch(_) {}
-                                break;
-                            }
+                        if (el.tagName === 'A' && el.href && (
+                            el.href.includes('/photo') ||
+                            el.href.includes('/posts/') ||
+                            el.href.includes('story_fbid') ||
+                            el.href.includes('permalink')
+                        )) {
+                            photoHref = el.href;
+                            break;
                         }
                         el = el.parentElement;
                     }
-                });
+
+                    try {
+                        const fn = new URL(img.src).pathname.split('/').pop();
+                        results.push({ fn, photoHref, src: img.src });
+                    } catch(_) {}
+                }
                 return results;
-            });
-            process.stderr.write(`[FALLBACK] Post-linked filenames in DOM: ${JSON.stringify(postLinkedFilenames)}\n`);
+            }, winnerIdx);
 
-            // Prefer images that appear in the DOM as post-linked; fall back to capture order
-            const postLinkedSet = new Set(postLinkedFilenames);
-            const candidate =
-                // First pass: large post-linked jpg from network capture (exclude .png — those are banners/covers)
-                captureOrder.find(fn => {
-                    if (!postLinkedSet.has(fn)) return false;
-                    if (fn.endsWith('.png')) return false;
-                    const size = capturedImages[fn] ? capturedImages[fn].length : 0;
-                    if (size < 20000) return false;
-                    if (fn.endsWith('.kf')) return false;
-                    return true;
-                }) ||
-                // Second pass: any large non-banner captured image (original heuristic, skip first)
-                (() => {
-                    let matchCount = 0;
-                    return captureOrder.find(fn => {
-                        const size = capturedImages[fn] ? capturedImages[fn].length : 0;
-                        if (size < 20000) return false;
-                        if (fn.endsWith('.kf')) return false;
-                        if (fn.endsWith('.png') && size < 50000) return false;
-                        matchCount++;
-                        return matchCount === 2;
-                    });
-                })();
+            process.stderr.write(`[FALLBACK] Images inside winning article: ${JSON.stringify((articleImageInfo || []).map(x => x.fn))}\n`);
 
-            if (!candidate) {
-                process.stderr.write('No suitable post image found on Facebook page.\n');
+            if (!articleImageInfo || articleImageInfo.length === 0) {
+                process.stderr.write('No images found inside winning article.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
 
-            // Try to find a photo href for full-res navigation
-            const fallbackPhotoHref = await page.evaluate((fname) => {
-                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                const img = imgs.find(i => {
-                    try { return new URL(i.src).pathname.split('/').pop() === fname; } catch(_) { return false; }
-                });
-                if (!img) return null;
-                let el = img;
-                for (let i = 0; i < 12; i++) {
-                    if (!el) break;
-                    if (el.tagName === 'A' && el.href && (
-                        el.href.includes('/photo') ||
-                        el.href.includes('/posts/') ||
-                        el.href.includes('story_fbid') ||
-                        el.href.includes('permalink')
-                    )) return el.href;
-                    el = el.parentElement;
+            // Pick the largest captured buffer among images found in the winning article
+            let bestFn = null, bestPhotoHref = null, bestSrc = null, bestSize = 0;
+            for (const { fn, photoHref, src } of articleImageInfo) {
+                const size = capturedImages[fn] ? capturedImages[fn].length : 0;
+                process.stderr.write(`[FALLBACK]   ${fn}: ${size} bytes captured\n`);
+                if (size > bestSize) {
+                    bestSize = size;
+                    bestFn = fn;
+                    bestPhotoHref = photoHref;
+                    bestSrc = src;
                 }
-                return null;
-            }, candidate);
+            }
 
-            targetFilename = candidate;
-            postImageInfo_resolved = { src: null, photoHref: fallbackPhotoHref };
-            process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)${fallbackPhotoHref ? ' [photo link found]' : ''}\n`);
+            if (!bestFn || bestSize < 5000) {
+                process.stderr.write('No suitable post image captured from winning article.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+            targetFilename = bestFn;
+            postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
+            process.stderr.write(`Network fallback selected: ${targetFilename} (${bestSize} bytes)${bestPhotoHref ? ' [photo link found]' : ''}\n`);
         }
 
         // Phase 3: open the modal viewer by clicking the post image, then capture the
