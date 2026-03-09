@@ -341,73 +341,149 @@ async function getLatestFacebookImage() {
             process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)${fallbackPhotoHref ? ' [photo link found]' : ''}\n`);
         }
 
-        // Phase 3: navigate to photo viewer for full-res, if we have a link
-        let fullResBuffer = null;
-        let fullResBytes = 0;
+        // Phase 3: navigate to photo viewer and extract full-res URL directly from the DOM.
+        // We no longer rely on response listeners (unreliable due to Puppeteer cache hits)
+        // — instead we let the viewer render, read the largest img src from the DOM,
+        // then fetch it in-page so session cookies are carried automatically.
 
-        const fullResListener = async (response) => {
-            try {
-                if (response.status() !== 200) return;
-                const url = response.url();
-                if (!url.includes('fbcdn.net')) return;
-                if (url.includes('rsrc.php')) return;
-                const ct = response.headers()['content-type'] || '';
-                if (!ct.startsWith('image/')) return;
-                const filename = getFilename(url);
-                if (filename !== targetFilename) return;
-                const buffer = await response.buffer();
-                if (buffer.length > fullResBytes) {
-                    fullResBuffer = buffer;
-                    fullResBytes = buffer.length;
-                    process.stderr.write(`Viewer loaded ${filename} at ${buffer.length} bytes\n`);
+        let fullResBuffer = null;
+
+        const navigateToViewer = async () => {
+            if (postImageInfo_resolved.photoHref) {
+                process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
+                await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
+            } else if (postImageInfo_resolved.src) {
+                process.stderr.write('Clicking post image to open viewer...\n');
+                await page.evaluate((targetSrc) => {
+                    const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
+                    const img = imgs.find(i => i.src === targetSrc);
+                    if (img) {
+                        let el = img;
+                        for (let i = 0; i < 8; i++) {
+                            if (!el) break;
+                            if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
+                                el.click();
+                                return;
+                            }
+                            el = el.parentElement;
+                        }
+                        img.click();
+                    }
+                }, postImageInfo_resolved.src);
+                try {
+                    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+                } catch (_) {
+                    // Modal viewer — no navigation event
                 }
-            } catch (_) {}
+            } else {
+                process.stderr.write('No photo href available, using feed capture directly.\n');
+                return false;
+            }
+            return true;
         };
 
-        page.on('response', fullResListener);
+        const didNavigate = await navigateToViewer();
 
-        if (postImageInfo_resolved.photoHref) {
-            process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
-            await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
-        } else if (postImageInfo_resolved.src) {
-            process.stderr.write('Clicking post image to open viewer...\n');
-            await page.evaluate((targetSrc) => {
-                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                const img = imgs.find(i => i.src === targetSrc);
-                if (img) {
-                    let el = img;
-                    for (let i = 0; i < 8; i++) {
-                        if (!el) break;
-                        if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
-                            el.click();
-                            return;
-                        }
-                        el = el.parentElement;
-                    }
-                    img.click();
-                }
-            }, postImageInfo_resolved.src);
+        if (didNavigate) {
+            // Give the viewer time to fully render the high-res image
+            await new Promise(r => setTimeout(r, 4000));
 
-            try {
-                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-            } catch (_) {
-                // Modal viewer — no navigation event
+            // --- VERBOSE DIAGNOSTIC DUMP ---
+            const viewerDiag = await page.evaluate(() => {
+                const allImgs = Array.from(document.querySelectorAll('img'));
+                const fbImgs = allImgs.filter(i => (i.src || '').includes('fbcdn'));
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    totalImgs: allImgs.length,
+                    fbcdnImgs: fbImgs.length,
+                    fbcdnDetails: fbImgs.map(i => ({
+                        src: i.src.substring(0, 120),
+                        naturalW: i.naturalWidth,
+                        naturalH: i.naturalHeight,
+                        displayW: i.width,
+                        displayH: i.height,
+                        complete: i.complete,
+                        alt: (i.alt || '').substring(0, 60),
+                    })),
+                    bodySnippet: document.body.innerHTML.substring(0, 500),
+                };
+            });
+            process.stderr.write(`[VIEWER DIAG] url=${viewerDiag.url}\n`);
+            process.stderr.write(`[VIEWER DIAG] title=${viewerDiag.title}\n`);
+            process.stderr.write(`[VIEWER DIAG] totalImgs=${viewerDiag.totalImgs} fbcdnImgs=${viewerDiag.fbcdnImgs}\n`);
+            viewerDiag.fbcdnDetails.forEach((img, idx) => {
+                process.stderr.write(
+                    `[VIEWER DIAG] img[${idx}] ${img.naturalW}x${img.naturalH} (display ${img.displayW}x${img.displayH}) complete=${img.complete} src=${img.src}\n`
+                );
+            });
+            if (viewerDiag.fbcdnImgs === 0) {
+                process.stderr.write(`[VIEWER DIAG] bodySnippet=${viewerDiag.bodySnippet}\n`);
             }
-        } else {
-            process.stderr.write('No photo href available, using feed capture directly.\n');
+            // --- END DIAGNOSTIC DUMP ---
+
+            // Extract the largest fbcdn image URL rendered in the viewer DOM.
+            const allViewerImgs = await page.evaluate(() => {
+                return Array.from(document.querySelectorAll('img[src*="fbcdn"]')).map(img => ({
+                    src: img.src,
+                    naturalW: img.naturalWidth,
+                    naturalH: img.naturalHeight,
+                    complete: img.complete,
+                }));
+            });
+
+            process.stderr.write(`[VIEWER] ${allViewerImgs.length} fbcdn imgs in DOM:\n`);
+            allViewerImgs.forEach((img, idx) => {
+                process.stderr.write(
+                    `  [${idx}] ${img.naturalW}x${img.naturalH} complete=${img.complete} score=${img.naturalW * img.naturalH} fn=${getFilename(img.src)}\n`
+                );
+            });
+
+            const scored = allViewerImgs
+                .filter(img => img.naturalW > 200 && img.naturalH > 200)
+                .sort((a, b) => (b.naturalW * b.naturalH) - (a.naturalW * a.naturalH));
+
+            process.stderr.write(`[VIEWER] ${scored.length} imgs pass 200x200 filter\n`);
+
+            const viewerImageUrl = scored.length ? scored[0].src : null;
+
+            if (viewerImageUrl) {
+                process.stderr.write(`[VIEWER] Selected: ${getFilename(viewerImageUrl)} (${scored[0].naturalW}x${scored[0].naturalH})\n`);
+
+                const fetchResult = await page.evaluate(async (url) => {
+                    try {
+                        const res = await fetch(url, { credentials: 'include' });
+                        const status = res.status;
+                        const ct = res.headers.get('content-type') || '';
+                        if (!res.ok) return { error: `HTTP ${status}`, ct };
+                        const ab = await res.arrayBuffer();
+                        return { bytes: Array.from(new Uint8Array(ab)), status, ct };
+                    } catch (e) {
+                        return { error: e.message };
+                    }
+                }, viewerImageUrl);
+
+                if (fetchResult.error) {
+                    process.stderr.write(`[VIEWER] In-page fetch failed: ${fetchResult.error} ct=${fetchResult.ct || 'n/a'}\n`);
+                } else if (fetchResult.bytes && fetchResult.bytes.length > 0) {
+                    fullResBuffer = Buffer.from(fetchResult.bytes);
+                    process.stderr.write(`[VIEWER] Fetched ${fullResBuffer.length} bytes (HTTP ${fetchResult.status}, ${fetchResult.ct})\n`);
+                } else {
+                    process.stderr.write(`[VIEWER] Fetch returned empty body (HTTP ${fetchResult.status}, ${fetchResult.ct})\n`);
+                }
+            } else {
+                process.stderr.write('[VIEWER] No image passed 200x200 filter — falling back to feed capture.\n');
+            }
         }
 
-        // Give the viewer time to fully load the high-res image
-        await new Promise(r => setTimeout(r, 4000));
-
-        // Pick the best buffer: full-res from viewer if we got it, else feed capture
+        // Pick the best buffer: full-res from viewer if larger than feed capture, else feed capture
         const feedBuffer = capturedImages[targetFilename];
 
         if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
             process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
             fs.writeFileSync(OUTPUT_FILE, fullResBuffer);
         } else if (feedBuffer) {
-            process.stderr.write(`Viewer didn't load higher res, using feed capture: ${feedBuffer.length} bytes\n`);
+            process.stderr.write(`Using feed capture: ${feedBuffer.length} bytes\n`);
             fs.writeFileSync(OUTPUT_FILE, feedBuffer);
         } else {
             process.stderr.write('No image buffer available.\n');
