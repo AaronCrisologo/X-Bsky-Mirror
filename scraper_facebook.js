@@ -309,22 +309,29 @@ async function getLatestFacebookImage() {
             const postLinkedFilenames = await page.evaluate(() => {
                 const results = [];
                 document.querySelectorAll('img[src*="fbcdn"]').forEach(img => {
-                    // Skip cover/profile images
-                    const cover = img.closest('[data-pagelet="ProfileCover"], [data-pagelet="ProfileActions"]');
+                    // Skip images inside known cover/profile pagelets
+                    const cover = img.closest('[data-pagelet="ProfileCover"], [data-pagelet="ProfileActions"], [data-pagelet="ProfileTilesFeed"]');
                     if (cover) return;
-                    // Must have an ancestor linking to a photo or post
+                    // Must have an ancestor linking to a photo or post,
+                    // BUT exclude cover-photo album links (set=a.) and profile picture links
                     let el = img.parentElement;
                     for (let i = 0; i < 15; i++) {
                         if (!el) break;
-                        if (el.tagName === 'A' && el.href && (
-                            el.href.includes('/photo') ||
-                            el.href.includes('/posts/') ||
-                            el.href.includes('story_fbid') ||
-                            el.href.includes('permalink')
-                        )) {
-                            try { results.push(new URL(img.src).pathname.split('/').pop()); }
-                            catch(_) {}
-                            break;
+                        if (el.tagName === 'A' && el.href) {
+                            const href = el.href;
+                            // Exclude cover/profile album links
+                            if (href.includes('set=a.')) break;
+                            if (href.includes('/photo') && href.includes('profile_id')) break;
+                            if (
+                                href.includes('/photo') ||
+                                href.includes('/posts/') ||
+                                href.includes('story_fbid') ||
+                                href.includes('permalink')
+                            ) {
+                                try { results.push(new URL(img.src).pathname.split('/').pop()); }
+                                catch(_) {}
+                                break;
+                            }
                         }
                         el = el.parentElement;
                     }
@@ -336,9 +343,10 @@ async function getLatestFacebookImage() {
             // Prefer images that appear in the DOM as post-linked; fall back to capture order
             const postLinkedSet = new Set(postLinkedFilenames);
             const candidate =
-                // First pass: large post-linked image from network capture
+                // First pass: large post-linked jpg from network capture (exclude .png — those are banners/covers)
                 captureOrder.find(fn => {
                     if (!postLinkedSet.has(fn)) return false;
+                    if (fn.endsWith('.png')) return false;
                     const size = capturedImages[fn] ? capturedImages[fn].length : 0;
                     if (size < 20000) return false;
                     if (fn.endsWith('.kf')) return false;
