@@ -352,36 +352,59 @@ async function getLatestFacebookImage() {
         let fullResBuffer = null;
 
         const navigateToViewer = async () => {
-            if (postImageInfo_resolved.photoHref) {
-                process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
-                await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
-            } else if (postImageInfo_resolved.src) {
-                process.stderr.write('Clicking post image to open viewer...\n');
-                await page.evaluate((targetSrc) => {
-                    const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                    const img = imgs.find(i => i.src === targetSrc);
-                    if (img) {
-                        let el = img;
-                        for (let i = 0; i < 8; i++) {
-                            if (!el) break;
-                            if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
-                                el.click();
-                                return;
-                            }
-                            el = el.parentElement;
-                        }
-                        img.click();
-                    }
-                }, postImageInfo_resolved.src);
-                try {
-                    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-                } catch (_) {
-                    // Modal viewer — no navigation event
+            // Always click the image on the feed page to open the modal viewer inline.
+            // We never do a full page.goto() to the photo URL because Facebook redirects
+            // direct photo navigations to the login page when using session cookies this way.
+            // The modal opens within the already-authenticated feed page, so no re-auth occurs.
+
+            const targetSrc = postImageInfo_resolved.src;
+            const targetFn  = targetFilename;
+
+            // Find the image in the DOM by src match, or fall back to filename match in src
+            const clicked = await page.evaluate((src, fn) => {
+                let img = null;
+                if (src) {
+                    img = Array.from(document.querySelectorAll('img[src*="fbcdn"]'))
+                             .find(i => i.src === src);
                 }
-            } else {
-                process.stderr.write('No photo href available, using feed capture directly.\n');
+                if (!img && fn) {
+                    img = Array.from(document.querySelectorAll('img[src*="fbcdn"]'))
+                             .find(i => {
+                                 try { return new URL(i.src).pathname.split('/').pop() === fn; }
+                                 catch(_) { return false; }
+                             });
+                }
+                if (!img) return 'not_found';
+
+                // Walk up to find a clickable ancestor (link or role=link)
+                let el = img;
+                for (let i = 0; i < 12; i++) {
+                    if (!el) break;
+                    if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
+                        el.click();
+                        return 'clicked_ancestor';
+                    }
+                    el = el.parentElement;
+                }
+                img.click();
+                return 'clicked_img';
+            }, targetSrc, targetFn);
+
+            process.stderr.write(`[VIEWER] Click result: ${clicked}\n`);
+
+            if (clicked === 'not_found') {
+                process.stderr.write('[VIEWER] Image not found in DOM — cannot open modal.\n');
                 return false;
             }
+
+            // Wait for the modal/dialog to appear in the DOM
+            try {
+                await page.waitForSelector('[role="dialog"] img[src*="fbcdn"], [role="main"] img[src*="fbcdn.net/v"]', { timeout: 8000 });
+                process.stderr.write('[VIEWER] Modal detected.\n');
+            } catch (_) {
+                process.stderr.write('[VIEWER] Modal wait timed out — proceeding anyway.\n');
+            }
+
             return true;
         };
 
