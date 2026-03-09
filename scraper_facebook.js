@@ -415,8 +415,13 @@ async function getLatestFacebookImage() {
                 if (!ct.startsWith('image/')) return;
                 const fn = getFilename(url);
                 if (!fn || fn.endsWith('.kf')) return;
+                // Only accept the target image — carousel neighbours will also load but we ignore them
+                if (fn !== targetFilename) {
+                    process.stderr.write(`[VIEWER] Skipping non-target response: ${fn}\n`);
+                    return;
+                }
                 const buffer = await response.buffer();
-                if (buffer.length < 30000) return; // skip tiny icons/avatars
+                if (buffer.length < 30000) return;
                 process.stderr.write(`[VIEWER] Response captured: ${fn} (${buffer.length} bytes)\n`);
                 if (buffer.length > fullResBytes) {
                     fullResBuffer = buffer;
