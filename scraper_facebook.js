@@ -298,54 +298,93 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Step 5: find the best image from network capture
-            let matchCount = 0;
-            const candidate = captureOrder.find(filename => {
-                const size = capturedImages[filename] ? capturedImages[filename].length : 0;
-                if (size < 20000) return false;
-                if (filename.endsWith('.kf')) return false;
-                if (filename.endsWith('.png') && size < 50000) return false;
-                matchCount++;
-                return matchCount === 2; // skip first match (banner), take second
-            });
+            // Step 5: find the best image from network capture, scoped to the winning article.
+            // We query images directly inside the latest article element — this naturally excludes
+            // the banner, profile picture, and all other posts regardless of file type.
+            const articleImageInfo = await page.evaluate((idx) => {
+                const article = document.querySelectorAll('[role="article"]')[idx];
+                if (!article) return null;
 
-            if (!candidate) {
-                process.stderr.write('No suitable post image found on Facebook page.\n');
+                const imgs = Array.from(article.querySelectorAll('img[src*="fbcdn"]'));
+                const results = [];
+
+                for (const img of imgs) {
+                    // Skip tiny avatars/icons
+                    if (img.naturalWidth > 0 && img.naturalWidth < 100) continue;
+                    if (img.width > 0 && img.width < 100) continue;
+
+                    let photoHref = null;
+                    let el = img.parentElement;
+                    for (let i = 0; i < 15; i++) {
+                        if (!el) break;
+                        if (el.tagName === 'A' && el.href && (
+                            el.href.includes('/photo') ||
+                            el.href.includes('/posts/') ||
+                            el.href.includes('story_fbid') ||
+                            el.href.includes('permalink')
+                        )) {
+                            photoHref = el.href;
+                            break;
+                        }
+                        el = el.parentElement;
+                    }
+
+                    try {
+                        const fn = new URL(img.src).pathname.split('/').pop();
+                        results.push({ fn, photoHref, src: img.src });
+                    } catch(_) {}
+                }
+                return results;
+            }, winnerIdx);
+
+            process.stderr.write(`[FALLBACK] Images inside winning article: ${JSON.stringify((articleImageInfo || []).map(x => x.fn))}\n`);
+
+            if (!articleImageInfo || articleImageInfo.length === 0) {
+                process.stderr.write('No images found inside winning article.\n');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
 
-            // Try to find a photo href for full-res navigation
-            const fallbackPhotoHref = await page.evaluate((fname) => {
-                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                const img = imgs.find(i => {
-                    try { return new URL(i.src).pathname.split('/').pop() === fname; } catch(_) { return false; }
-                });
-                if (!img) return null;
-                let el = img;
-                for (let i = 0; i < 12; i++) {
-                    if (!el) break;
-                    if (el.tagName === 'A' && el.href && (
-                        el.href.includes('/photo') ||
-                        el.href.includes('/posts/') ||
-                        el.href.includes('story_fbid') ||
-                        el.href.includes('permalink')
-                    )) return el.href;
-                    el = el.parentElement;
+            // Pick the largest captured buffer among images found in the winning article
+            let bestFn = null, bestPhotoHref = null, bestSrc = null, bestSize = 0;
+            for (const { fn, photoHref, src } of articleImageInfo) {
+                const size = capturedImages[fn] ? capturedImages[fn].length : 0;
+                process.stderr.write(`[FALLBACK]   ${fn}: ${size} bytes captured\n`);
+                if (size > bestSize) {
+                    bestSize = size;
+                    bestFn = fn;
+                    bestPhotoHref = photoHref;
+                    bestSrc = src;
                 }
-                return null;
-            }, candidate);
+            }
 
-            targetFilename = candidate;
-            postImageInfo_resolved = { src: null, photoHref: fallbackPhotoHref };
-            process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)${fallbackPhotoHref ? ' [photo link found]' : ''}\n`);
+            if (!bestFn || bestSize < 5000) {
+                process.stderr.write('No suitable post image captured from winning article.\n');
+                console.log(JSON.stringify({ error: 'no_image_found' }));
+                return;
+            }
+            targetFilename = bestFn;
+            postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
+            process.stderr.write(`Network fallback selected: ${targetFilename} (${bestSize} bytes)${bestPhotoHref ? ' [photo link found]' : ''}\n`);
         }
 
-        // Phase 3: navigate to photo viewer for full-res, if we have a link
-        let fullResBuffer = null;
-        let fullResBytes = 0;
+        // Phase 3: open the modal viewer by clicking the post image, then capture the
+        // full-res image via a Puppeteer response listener.
+        // Key points:
+        //  - We NEVER navigate away (page.goto) — that triggers a login redirect.
+        //  - We disable Puppeteer's cache before clicking so the modal's image request
+        //    hits the network and fires a response event (cached responses emit nothing).
+        //  - We avoid in-page fetch() which is blocked by fbcdn CORS headers.
 
-        const fullResListener = async (response) => {
+        let fullResBuffer = null;
+
+        // Disable cache NOW, before the click, so modal image requests go over the wire.
+        await page.setCacheEnabled(false);
+        process.stderr.write('[VIEWER] Cache disabled — modal image requests will hit network.\n');
+
+        // Set up the response listener BEFORE clicking, so we don't miss early responses.
+        let fullResBytes = 0;
+        const modalResponseListener = async (response) => {
             try {
                 if (response.status() !== 200) return;
                 const url = response.url();
@@ -353,61 +392,118 @@ async function getLatestFacebookImage() {
                 if (url.includes('rsrc.php')) return;
                 const ct = response.headers()['content-type'] || '';
                 if (!ct.startsWith('image/')) return;
-                const filename = getFilename(url);
-                if (filename !== targetFilename) return;
+                const fn = getFilename(url);
+                if (!fn || fn.endsWith('.kf')) return;
+                // Only accept the target image — carousel neighbours will also load but we ignore them
+                if (fn !== targetFilename) {
+                    process.stderr.write(`[VIEWER] Skipping non-target response: ${fn}\n`);
+                    return;
+                }
                 const buffer = await response.buffer();
+                if (buffer.length < 30000) return;
+                process.stderr.write(`[VIEWER] Response captured: ${fn} (${buffer.length} bytes)\n`);
                 if (buffer.length > fullResBytes) {
                     fullResBuffer = buffer;
                     fullResBytes = buffer.length;
-                    process.stderr.write(`Viewer loaded ${filename} at ${buffer.length} bytes\n`);
+                    process.stderr.write(`[VIEWER] → New best: ${fn} at ${buffer.length} bytes\n`);
                 }
             } catch (_) {}
         };
+        page.on('response', modalResponseListener);
 
-        page.on('response', fullResListener);
+        const navigateToViewer = async () => {
+            // Always click the image on the feed page to open the modal viewer inline.
+            // We never do a full page.goto() to the photo URL because Facebook redirects
+            // direct photo navigations to the login page when using session cookies this way.
+            // The modal opens within the already-authenticated feed page, so no re-auth occurs.
 
-        if (postImageInfo_resolved.photoHref) {
-            process.stderr.write(`Navigating to photo viewer: ${postImageInfo_resolved.photoHref}\n`);
-            await page.goto(postImageInfo_resolved.photoHref, { waitUntil: 'networkidle2', timeout: 30000 });
-        } else if (postImageInfo_resolved.src) {
-            process.stderr.write('Clicking post image to open viewer...\n');
-            await page.evaluate((targetSrc) => {
-                const imgs = Array.from(document.querySelectorAll('img[src*="fbcdn"]'));
-                const img = imgs.find(i => i.src === targetSrc);
-                if (img) {
-                    let el = img;
-                    for (let i = 0; i < 8; i++) {
-                        if (!el) break;
-                        if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
-                            el.click();
-                            return;
-                        }
-                        el = el.parentElement;
-                    }
-                    img.click();
+            const targetSrc = postImageInfo_resolved.src;
+            const targetFn  = targetFilename;
+
+            // Find the image in the DOM by src match, or fall back to filename match in src
+            const clicked = await page.evaluate((src, fn) => {
+                let img = null;
+                if (src) {
+                    img = Array.from(document.querySelectorAll('img[src*="fbcdn"]'))
+                             .find(i => i.src === src);
                 }
-            }, postImageInfo_resolved.src);
+                if (!img && fn) {
+                    img = Array.from(document.querySelectorAll('img[src*="fbcdn"]'))
+                             .find(i => {
+                                 try { return new URL(i.src).pathname.split('/').pop() === fn; }
+                                 catch(_) { return false; }
+                             });
+                }
+                if (!img) return 'not_found';
 
-            try {
-                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-            } catch (_) {
-                // Modal viewer — no navigation event
+                // Walk up to find a clickable ancestor (link or role=link)
+                let el = img;
+                for (let i = 0; i < 12; i++) {
+                    if (!el) break;
+                    if (el.tagName === 'A' || el.getAttribute('role') === 'link') {
+                        el.click();
+                        return 'clicked_ancestor';
+                    }
+                    el = el.parentElement;
+                }
+                img.click();
+                return 'clicked_img';
+            }, targetSrc, targetFn);
+
+            process.stderr.write(`[VIEWER] Click result: ${clicked}\n`);
+
+            if (clicked === 'not_found') {
+                process.stderr.write('[VIEWER] Image not found in DOM — cannot open modal.\n');
+                return false;
             }
-        } else {
-            process.stderr.write('No photo href available, using feed capture directly.\n');
+
+            // Wait for the modal/dialog to appear in the DOM
+            try {
+                await page.waitForSelector('[role="dialog"] img[src*="fbcdn"], [role="main"] img[src*="fbcdn.net/v"]', { timeout: 8000 });
+                process.stderr.write('[VIEWER] Modal detected.\n');
+            } catch (_) {
+                process.stderr.write('[VIEWER] Modal wait timed out — proceeding anyway.\n');
+            }
+
+            return true;
+        };
+
+        const didNavigate = await navigateToViewer();
+
+        if (didNavigate) {
+            // Wait for the modal's full-res image to arrive over the network.
+            // The response listener above will populate fullResBuffer as responses come in.
+            process.stderr.write('[VIEWER] Waiting for modal image responses...\n');
+            await new Promise(r => setTimeout(r, 5000));
+            process.stderr.write(`[VIEWER] Wait complete. Best response so far: ${fullResBytes} bytes\n`);
+
+            // Diagnostic: dump what's in the modal DOM for debugging
+            const modalImgs = await page.evaluate(() => {
+                const dialog = document.querySelector('[role="dialog"]');
+                const root = dialog || document;
+                return Array.from(root.querySelectorAll('img[src*="fbcdn"]')).map(img => ({
+                    fn: (() => { try { return new URL(img.src).pathname.split('/').pop(); } catch(_) { return '?'; } })(),
+                    naturalW: img.naturalWidth,
+                    naturalH: img.naturalHeight,
+                    complete: img.complete,
+                }));
+            });
+            process.stderr.write(`[VIEWER DIAG] Modal DOM imgs (${modalImgs.length}):\n`);
+            modalImgs.forEach((img, idx) => {
+                process.stderr.write(`  [${idx}] ${img.naturalW}x${img.naturalH} complete=${img.complete} fn=${img.fn}\n`);
+            });
         }
 
-        // Give the viewer time to fully load the high-res image
-        await new Promise(r => setTimeout(r, 4000));
+        page.off('response', modalResponseListener);
 
-        // Pick the best buffer: full-res from viewer if we got it, else feed capture
+        // Pick the best buffer: full-res from viewer if larger than feed capture, else feed capture
         const feedBuffer = capturedImages[targetFilename];
 
         if (fullResBuffer && fullResBuffer.length > (feedBuffer ? feedBuffer.length : 0)) {
             process.stderr.write(`Using full-res viewer image: ${fullResBuffer.length} bytes\n`);
             fs.writeFileSync(OUTPUT_FILE, fullResBuffer);
         } else if (feedBuffer) {
-            process.stderr.write(`Viewer didn't load higher res, using feed capture: ${feedBuffer.length} bytes\n`);
+            process.stderr.write(`Using feed capture: ${feedBuffer.length} bytes\n`);
             fs.writeFileSync(OUTPUT_FILE, feedBuffer);
         } else {
             process.stderr.write('No image buffer available.\n');
