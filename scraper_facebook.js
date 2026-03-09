@@ -301,16 +301,61 @@ async function getLatestFacebookImage() {
                 return;
             }
 
-            // Step 5: find the best image from network capture
-            let matchCount = 0;
-            const candidate = captureOrder.find(filename => {
-                const size = capturedImages[filename] ? capturedImages[filename].length : 0;
-                if (size < 20000) return false;
-                if (filename.endsWith('.kf')) return false;
-                if (filename.endsWith('.png') && size < 50000) return false;
-                matchCount++;
-                return matchCount === 2; // skip first match (banner), take second
+            // Step 5: find the best image from network capture.
+            // Cross-reference with the DOM to exclude cover/banner images — those sit inside
+            // [data-pagelet="ProfileCover"] or are linked from an element with role="img" and
+            // aria-label containing "cover". We also exclude images that are NOT linked to a
+            // photo/post href (i.e. not clickable post images).
+            const postLinkedFilenames = await page.evaluate(() => {
+                const results = [];
+                document.querySelectorAll('img[src*="fbcdn"]').forEach(img => {
+                    // Skip cover/profile images
+                    const cover = img.closest('[data-pagelet="ProfileCover"], [data-pagelet="ProfileActions"]');
+                    if (cover) return;
+                    // Must have an ancestor linking to a photo or post
+                    let el = img.parentElement;
+                    for (let i = 0; i < 15; i++) {
+                        if (!el) break;
+                        if (el.tagName === 'A' && el.href && (
+                            el.href.includes('/photo') ||
+                            el.href.includes('/posts/') ||
+                            el.href.includes('story_fbid') ||
+                            el.href.includes('permalink')
+                        )) {
+                            try { results.push(new URL(img.src).pathname.split('/').pop()); }
+                            catch(_) {}
+                            break;
+                        }
+                        el = el.parentElement;
+                    }
+                });
+                return results;
             });
+            process.stderr.write(`[FALLBACK] Post-linked filenames in DOM: ${JSON.stringify(postLinkedFilenames)}\n`);
+
+            // Prefer images that appear in the DOM as post-linked; fall back to capture order
+            const postLinkedSet = new Set(postLinkedFilenames);
+            const candidate =
+                // First pass: large post-linked image from network capture
+                captureOrder.find(fn => {
+                    if (!postLinkedSet.has(fn)) return false;
+                    const size = capturedImages[fn] ? capturedImages[fn].length : 0;
+                    if (size < 20000) return false;
+                    if (fn.endsWith('.kf')) return false;
+                    return true;
+                }) ||
+                // Second pass: any large non-banner captured image (original heuristic, skip first)
+                (() => {
+                    let matchCount = 0;
+                    return captureOrder.find(fn => {
+                        const size = capturedImages[fn] ? capturedImages[fn].length : 0;
+                        if (size < 20000) return false;
+                        if (fn.endsWith('.kf')) return false;
+                        if (fn.endsWith('.png') && size < 50000) return false;
+                        matchCount++;
+                        return matchCount === 2;
+                    });
+                })();
 
             if (!candidate) {
                 process.stderr.write('No suitable post image found on Facebook page.\n');
@@ -344,12 +389,43 @@ async function getLatestFacebookImage() {
             process.stderr.write(`Network fallback selected: ${targetFilename} (${capturedImages[candidate].length} bytes)${fallbackPhotoHref ? ' [photo link found]' : ''}\n`);
         }
 
-        // Phase 3: navigate to photo viewer and extract full-res URL directly from the DOM.
-        // We no longer rely on response listeners (unreliable due to Puppeteer cache hits)
-        // — instead we let the viewer render, read the largest img src from the DOM,
-        // then fetch it in-page so session cookies are carried automatically.
+        // Phase 3: open the modal viewer by clicking the post image, then capture the
+        // full-res image via a Puppeteer response listener.
+        // Key points:
+        //  - We NEVER navigate away (page.goto) — that triggers a login redirect.
+        //  - We disable Puppeteer's cache before clicking so the modal's image request
+        //    hits the network and fires a response event (cached responses emit nothing).
+        //  - We avoid in-page fetch() which is blocked by fbcdn CORS headers.
 
         let fullResBuffer = null;
+
+        // Disable cache NOW, before the click, so modal image requests go over the wire.
+        await page.setCacheEnabled(false);
+        process.stderr.write('[VIEWER] Cache disabled — modal image requests will hit network.\n');
+
+        // Set up the response listener BEFORE clicking, so we don't miss early responses.
+        let fullResBytes = 0;
+        const modalResponseListener = async (response) => {
+            try {
+                if (response.status() !== 200) return;
+                const url = response.url();
+                if (!url.includes('fbcdn.net')) return;
+                if (url.includes('rsrc.php')) return;
+                const ct = response.headers()['content-type'] || '';
+                if (!ct.startsWith('image/')) return;
+                const fn = getFilename(url);
+                if (!fn || fn.endsWith('.kf')) return;
+                const buffer = await response.buffer();
+                if (buffer.length < 30000) return; // skip tiny icons/avatars
+                process.stderr.write(`[VIEWER] Response captured: ${fn} (${buffer.length} bytes)\n`);
+                if (buffer.length > fullResBytes) {
+                    fullResBuffer = buffer;
+                    fullResBytes = buffer.length;
+                    process.stderr.write(`[VIEWER] → New best: ${fn} at ${buffer.length} bytes\n`);
+                }
+            } catch (_) {}
+        };
+        page.on('response', modalResponseListener);
 
         const navigateToViewer = async () => {
             // Always click the image on the feed page to open the modal viewer inline.
@@ -411,96 +487,30 @@ async function getLatestFacebookImage() {
         const didNavigate = await navigateToViewer();
 
         if (didNavigate) {
-            // Give the viewer time to fully render the high-res image
-            await new Promise(r => setTimeout(r, 4000));
+            // Wait for the modal's full-res image to arrive over the network.
+            // The response listener above will populate fullResBuffer as responses come in.
+            process.stderr.write('[VIEWER] Waiting for modal image responses...\n');
+            await new Promise(r => setTimeout(r, 5000));
+            process.stderr.write(`[VIEWER] Wait complete. Best response so far: ${fullResBytes} bytes\n`);
 
-            // --- VERBOSE DIAGNOSTIC DUMP ---
-            const viewerDiag = await page.evaluate(() => {
-                const allImgs = Array.from(document.querySelectorAll('img'));
-                const fbImgs = allImgs.filter(i => (i.src || '').includes('fbcdn'));
-                return {
-                    url: window.location.href,
-                    title: document.title,
-                    totalImgs: allImgs.length,
-                    fbcdnImgs: fbImgs.length,
-                    fbcdnDetails: fbImgs.map(i => ({
-                        src: i.src.substring(0, 120),
-                        naturalW: i.naturalWidth,
-                        naturalH: i.naturalHeight,
-                        displayW: i.width,
-                        displayH: i.height,
-                        complete: i.complete,
-                        alt: (i.alt || '').substring(0, 60),
-                    })),
-                    bodySnippet: document.body.innerHTML.substring(0, 500),
-                };
-            });
-            process.stderr.write(`[VIEWER DIAG] url=${viewerDiag.url}\n`);
-            process.stderr.write(`[VIEWER DIAG] title=${viewerDiag.title}\n`);
-            process.stderr.write(`[VIEWER DIAG] totalImgs=${viewerDiag.totalImgs} fbcdnImgs=${viewerDiag.fbcdnImgs}\n`);
-            viewerDiag.fbcdnDetails.forEach((img, idx) => {
-                process.stderr.write(
-                    `[VIEWER DIAG] img[${idx}] ${img.naturalW}x${img.naturalH} (display ${img.displayW}x${img.displayH}) complete=${img.complete} src=${img.src}\n`
-                );
-            });
-            if (viewerDiag.fbcdnImgs === 0) {
-                process.stderr.write(`[VIEWER DIAG] bodySnippet=${viewerDiag.bodySnippet}\n`);
-            }
-            // --- END DIAGNOSTIC DUMP ---
-
-            // Extract the largest fbcdn image URL rendered in the viewer DOM.
-            const allViewerImgs = await page.evaluate(() => {
-                return Array.from(document.querySelectorAll('img[src*="fbcdn"]')).map(img => ({
-                    src: img.src,
+            // Diagnostic: dump what's in the modal DOM for debugging
+            const modalImgs = await page.evaluate(() => {
+                const dialog = document.querySelector('[role="dialog"]');
+                const root = dialog || document;
+                return Array.from(root.querySelectorAll('img[src*="fbcdn"]')).map(img => ({
+                    fn: (() => { try { return new URL(img.src).pathname.split('/').pop(); } catch(_) { return '?'; } })(),
                     naturalW: img.naturalWidth,
                     naturalH: img.naturalHeight,
                     complete: img.complete,
                 }));
             });
-
-            process.stderr.write(`[VIEWER] ${allViewerImgs.length} fbcdn imgs in DOM:\n`);
-            allViewerImgs.forEach((img, idx) => {
-                process.stderr.write(
-                    `  [${idx}] ${img.naturalW}x${img.naturalH} complete=${img.complete} score=${img.naturalW * img.naturalH} fn=${getFilename(img.src)}\n`
-                );
+            process.stderr.write(`[VIEWER DIAG] Modal DOM imgs (${modalImgs.length}):\n`);
+            modalImgs.forEach((img, idx) => {
+                process.stderr.write(`  [${idx}] ${img.naturalW}x${img.naturalH} complete=${img.complete} fn=${img.fn}\n`);
             });
-
-            const scored = allViewerImgs
-                .filter(img => img.naturalW > 200 && img.naturalH > 200)
-                .sort((a, b) => (b.naturalW * b.naturalH) - (a.naturalW * a.naturalH));
-
-            process.stderr.write(`[VIEWER] ${scored.length} imgs pass 200x200 filter\n`);
-
-            const viewerImageUrl = scored.length ? scored[0].src : null;
-
-            if (viewerImageUrl) {
-                process.stderr.write(`[VIEWER] Selected: ${getFilename(viewerImageUrl)} (${scored[0].naturalW}x${scored[0].naturalH})\n`);
-
-                const fetchResult = await page.evaluate(async (url) => {
-                    try {
-                        const res = await fetch(url, { credentials: 'include' });
-                        const status = res.status;
-                        const ct = res.headers.get('content-type') || '';
-                        if (!res.ok) return { error: `HTTP ${status}`, ct };
-                        const ab = await res.arrayBuffer();
-                        return { bytes: Array.from(new Uint8Array(ab)), status, ct };
-                    } catch (e) {
-                        return { error: e.message };
-                    }
-                }, viewerImageUrl);
-
-                if (fetchResult.error) {
-                    process.stderr.write(`[VIEWER] In-page fetch failed: ${fetchResult.error} ct=${fetchResult.ct || 'n/a'}\n`);
-                } else if (fetchResult.bytes && fetchResult.bytes.length > 0) {
-                    fullResBuffer = Buffer.from(fetchResult.bytes);
-                    process.stderr.write(`[VIEWER] Fetched ${fullResBuffer.length} bytes (HTTP ${fetchResult.status}, ${fetchResult.ct})\n`);
-                } else {
-                    process.stderr.write(`[VIEWER] Fetch returned empty body (HTTP ${fetchResult.status}, ${fetchResult.ct})\n`);
-                }
-            } else {
-                process.stderr.write('[VIEWER] No image passed 200x200 filter — falling back to feed capture.\n');
-            }
         }
+
+        page.off('response', modalResponseListener);
 
         // Pick the best buffer: full-res from viewer if larger than feed capture, else feed capture
         const feedBuffer = capturedImages[targetFilename];
