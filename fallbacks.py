@@ -156,25 +156,33 @@ def get_fallback_data(post_text):
     is_pickup = "pickup summon" in text_normalized  # also use normalized here
 
     if is_pickup:
-        # 1. Split by quotes
-        parts = re.split(r'["\u201c\u201d]', text_normalized)
+        # Strategy: Find servant names that appear after the ★ emoji in the full text
+        # The featured servant is always introduced with ★, so we prioritize names after it
+        star_pos = text_normalized.find('★')
+        if star_pos != -1:
+            after_star = text_normalized[star_pos:]
+            servant_matches = []
+            for name, data in NORMALIZED_SERVANTS_MAP.items():
+                pos = after_star.find(name)
+                if pos != -1:
+                    servant_matches.append((pos, -len(name), name, data))
+            
+            if servant_matches:
+                servant_matches.sort()
+                winner_data = servant_matches[0][3]
+                full_path = os.path.join(IMAGE_DIR, winner_data["img"])
+                if os.path.exists(full_path):
+                    return full_path, winner_data["alt"]
         
-        # 2. Get the first part that actually contains text (the headline)
-        # This handles the case where the post STARTS with a quote
-        headline = ""
-        for part in parts:
-            if part.strip():
-                headline = part
-                break
-        
+        # Fallback: search entire text for any servant name
         servant_matches = []
         for name, data in NORMALIZED_SERVANTS_MAP.items():
-            if name in headline: # Only search the headline, not the flavor text
-                servant_matches.append((-len(name), data))
+            if name in text_normalized:
+                servant_matches.append((-len(name), name, data))
 
         if servant_matches:
             servant_matches.sort()
-            winner_data = servant_matches[0][1]
+            winner_data = servant_matches[0][2]
             full_path = os.path.join(IMAGE_DIR, winner_data["img"])
             if os.path.exists(full_path):
                 return full_path, winner_data["alt"]
