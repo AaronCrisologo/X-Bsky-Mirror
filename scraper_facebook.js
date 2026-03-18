@@ -180,8 +180,39 @@ async function getLatestFacebookImage() {
 
             // Step 1: mark each article's post-level timestamp <a> with a probe attribute
             // so Puppeteer can hover it. Post-level = aria-label matches text, no comment_id in href.
+            // Try multiple selectors for articles (Facebook changes these periodically)
+            const articleDebug = await page.evaluate(() => {
+                const selectors = [
+                    '[role="article"]',
+                    '[data-pagelet="FeedUnit"]',
+                    '[data-pagelet^="FeedUnit_"]',
+                    '.x1lliihq',  // Common FB post class
+                    'div[tabindex="-1"][data-visualcompletion="ignore-dynamic"]'
+                ];
+                const results = {};
+                for (const sel of selectors) {
+                    results[sel] = document.querySelectorAll(sel).length;
+                }
+                // Also get the page HTML structure hints
+                const bodyChildren = document.body ? document.body.children.length : 0;
+                const mainContent = document.querySelector('main') || document.querySelector('[role="main"]');
+                results['mainExists'] = !!mainContent;
+                results['bodyChildren'] = bodyChildren;
+                return results;
+            });
+            process.stderr.write(`Article selector debug: ${JSON.stringify(articleDebug)}\n`);
+
             const articleCount = await page.evaluate(() => {
-                const articles = Array.from(document.querySelectorAll('[role="article"]'));
+                // Try multiple selectors for finding posts
+                let articles = Array.from(document.querySelectorAll('[role="article"]'));
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
+                }
+                if (articles.length === 0) {
+                    // Fallback: look for post containers by common patterns
+                    articles = Array.from(document.querySelectorAll('div[tabindex="-1"][data-visualcompletion="ignore-dynamic"]'));
+                }
+                
                 let marked = 0;
                 articles.forEach((article, idx) => {
                     const links = Array.from(article.querySelectorAll('a[aria-label]'));
@@ -196,6 +227,7 @@ async function getLatestFacebookImage() {
                         }
                     }
                 });
+                process.stderr.write(`Found ${articles.length} articles, marked ${marked} with timestamps\n`);
                 return articles.length;
             });
 
@@ -271,7 +303,15 @@ async function getLatestFacebookImage() {
 
             // Step 4: check that article for video signals
             const videoCheck = await page.evaluate((idx) => {
-                const root = document.querySelectorAll('[role="article"]')[idx];
+                // Try multiple selectors for finding posts
+                let articles = Array.from(document.querySelectorAll('[role="article"]'));
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
+                }
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('div[tabindex="-1"][data-visualcompletion="ignore-dynamic"]'));
+                }
+                const root = articles[idx];
                 if (!root) return { noArticle: true };
                 return {
                     video:       !!root.querySelector('video'),
@@ -302,7 +342,15 @@ async function getLatestFacebookImage() {
             // We query images directly inside the latest article element — this naturally excludes
             // the banner, profile picture, and all other posts regardless of file type.
             const articleImageInfo = await page.evaluate((idx) => {
-                const article = document.querySelectorAll('[role="article"]')[idx];
+                // Try multiple selectors for finding posts
+                let articles = Array.from(document.querySelectorAll('[role="article"]'));
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
+                }
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('div[tabindex="-1"][data-visualcompletion="ignore-dynamic"]'));
+                }
+                const article = articles[idx];
                 if (!article) return null;
 
                 const imgs = Array.from(article.querySelectorAll('img[src*="fbcdn"]'));
