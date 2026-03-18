@@ -94,11 +94,14 @@ async function getLatestTweet(username) {
                 await new Promise(r => setTimeout(r, 1500));
             }
             
-            const cleanList = results.filter((v, i, a) =>
-                a.findIndex(t => t.time === v.time) === i && !v.isPinned
+            // Remove duplicates first
+            const unique = results.filter((v, i, a) =>
+                a.findIndex(t => t.time === v.time) === i
             );
-            cleanList.sort((a, b) => new Date(b.time) - new Date(a.time));
-            return cleanList[0];
+            // Sort by time descending (newest first)
+            unique.sort((a, b) => new Date(b.time) - new Date(a.time));
+            // Return the newest post (pinned or not)
+            return unique[0];
         });
 
         // If it's a video or has no images, we won't try to download anything
