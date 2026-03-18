@@ -58,6 +58,7 @@ SERVANTS_MAP = {
     "takasugi shinsaku": {"img": "Takasugi Shinsaku.jpg", "alt": "Takasugi Shinsaku Pickup Summon"},
     "arthur pendragon": {"img": "Arthur Pendragon.jpg", "alt": "Arthur Pendragon (Prototype) Pickup Summon"},
     "arjuna (alter)": {"img": "Arjuna (Alter).jpg", "alt": "Arjuna (Alter) Pickup Summon"},
+    "altria pendragon (alter)": {"img": "Altria Pendragon.jpg", "alt": "Altria Pendragon (Alter) Pickup Summon"},
     "amakusa shirou": {"img": "Amakusa Shirou.jpg", "alt": "Amakusa Shirou Pickup Summon"},
     "amakusa shiro": {"img": "Amakusa Shirou.jpg", "alt": "Amakusa Shirou Pickup Summon"},  # shirō normalizes to shiro, not shirou
     "odysseus": {"img": "Odysseus.jpg", "alt": "Odysseus Pickup Summon"},
@@ -173,8 +174,25 @@ def get_fallback_data(post_text):
                 full_path = os.path.join(IMAGE_DIR, winner_data["img"])
                 if os.path.exists(full_path):
                     return full_path, winner_data["alt"]
+            # If no exact match after ★, try partial matching (substring in either direction)
+            else:
+                # Extract a candidate name by taking words after ★ up to punctuation or "pickup summon"
+                candidate_match = re.search(r'★\s*\d+\s*\([^)]*\)\s*([a-z0-9\s\-]+?)(?=\s*(?:pickup summon|,|\.|!|\?|$))', after_star)
+                if candidate_match:
+                    candidate = candidate_match.group(1).strip()
+                    # Find map keys that contain candidate OR that candidate contains
+                    partial_matches = []
+                    for name, data in NORMALIZED_SERVANTS_MAP.items():
+                        if candidate in name or name in candidate:
+                            partial_matches.append((-abs(len(name) - len(candidate)), name, data))  # Prefer closer length
+                    if partial_matches:
+                        partial_matches.sort()
+                        winner_data = partial_matches[0][2]
+                        full_path = os.path.join(IMAGE_DIR, winner_data["img"])
+                        if os.path.exists(full_path):
+                            return full_path, winner_data["alt"]
         
-        # Fallback: search entire text for any servant name
+        # Fallback: search entire text for any servant name (exact match only)
         servant_matches = []
         for name, data in NORMALIZED_SERVANTS_MAP.items():
             if name in text_normalized:

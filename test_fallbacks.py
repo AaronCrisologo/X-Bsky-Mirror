@@ -80,6 +80,28 @@ test_cases = [
     
     # Test 22
     ("Here's your opportunity to summon ★5 (SSR) Galatea during the Valentine's 2026 Pickup Summon!\n\n\"A beautiful statue made human by a king's love.\"\n\n#FateGOUSA", "Galatea"),
+    
+    # Test 23 - Monte Cristo (shortened name, should match "the count of monte cristo")
+    ("★5 (SSR) Monte Cristo, the world's most renowned avenger, is debuting during the \"Id\" Monte Cristo Pickup Summon!\n\n\"I will watch your end from the place beyond love and hate.\"", "the count of monte cristo"),
+    
+    # Test 24-28 - Altria Pendragon variants (should all match "altria pendragon")
+    # Test 24 - Altria Pendragon (Saber)
+    ("★5 (SSR) Altria Pendragon (Saber) makes a return during the Valentine's 2026 Pickup Summon!\n\n\"This sword is the breath of the planet itself. The King of Knights has arrived.\"\n\n#FateGOUSA", "altria pendragon"),
+    
+    # Test 25 - Altria Pendragon (Lancer)
+    ("★5 (SSR) Altria Pendragon (Lancer) is next to be featured during the Valentine's 2026 Pickup Summon!\n\n\"O Holy Lance, lift thy anchor. The Lord of Camelot shall manifest here beyond the sea of light.\"", "altria pendragon"),
+    
+    # Test 26 - Altria Pendragon Alter (Rider)
+    ("The Pilgrimage Festival: Part 7 Pickup Summon has begun! ★5 (SSR) Altria Pendragon Alter (Rider) is featured!\n\n\"Time for your training, Master. We'll start by carving off all that excess flab!\"", "altria pendragon"),
+    
+    # Test 27 - Altria Pendragon (Lancer) again (duplicate variant)
+    ("Welcome ★5 (SSR) Altria Pendragon (Lancer) as the next featured Servant for the Grail Front Pre-Release Pickup Summon!\n\n\"O Holy Lance, lift thy anchor. The Lord of Camelot shall manifest here beyond the sea of light.\"\n\n#FateGOUSA", "altria pendragon"),
+    
+    # Test 28 - Altria Pendragon (Archer)
+    ("The drop rate for ★5 (SSR) Altria Pendragon (Archer) has increased during the \"23 Million Downloads Pickup Summon\"!\n\n\"Her cape billows under the dazzling sunshine, the King of the Beach and Water Blitz now making her entrance!\"\n\n#FateGOUSA", "altria pendragon"),
+    
+    # Test 29 - Altria Pendragon (Alter) (Saber) - maps to Altria Pendragon.jpg
+    ("★4 (SR) Altria Pendragon (Alter) (Saber) returns for the \"Back to School Campaign 2024 Koyanskaya of Light Pickup Summon\"!\n\n\"The rising sun, reversed, strikes down the dragon. The darkened King of Knights follows in Vortigern's footsteps.\"", "Altria Pendragon"),
 ]
 
 def run_tests():
