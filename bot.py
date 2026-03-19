@@ -330,6 +330,12 @@ def main():
                 print("🔍 [MAIN] No tweet images or video detected. Fetching Facebook image...")
                 fb_image_path, fb_text = get_facebook_image()
                 
+                # Always log what we got from Facebook
+                if fb_text:
+                    print(f"📝 [FB] Facebook text: {fb_text[:150]}...")
+                else:
+                    print("⚠️  [FB] No text extracted from Facebook post.")
+                
                 # Only use Facebook image if the text matches the Twitter text
                 if fb_image_path and fb_text and texts_match(post_text, fb_text):
                     print("✅ [MAIN] Facebook image matches Twitter text. Using Facebook image.")
