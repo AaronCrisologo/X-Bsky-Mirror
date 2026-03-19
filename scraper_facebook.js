@@ -191,11 +191,11 @@ async function getLatestFacebookImage() {
             }
         }
 
-            // Store the Facebook post text if available
-            if (postData && postData.text) {
-                fbPostText = postData.text;
-                console.log(`Facebook post text: ${fbPostText.substring(0, 100)}...`);
-            }
+        // Store the Facebook post text if available from pagelet path
+        if (postData && postData.text) {
+            fbPostText = postData.text;
+            console.log(`Facebook post text: ${fbPostText.substring(0, 100)}...`);
+        }
 
         if (!postImageInfo_resolved) {
             // Network capture fallback: hover each article's post-level timestamp link to get the
@@ -363,7 +363,7 @@ async function getLatestFacebookImage() {
             }
 
             // Step 5: Extract text from the winning article
-            const fbText = await page.evaluate((idx) => {
+            const extractedText = await page.evaluate((idx) => {
                 // Try multiple selectors for finding posts
                 let articles = Array.from(document.querySelectorAll('[role="article"]'));
                 if (articles.length === 0) {
@@ -389,7 +389,9 @@ async function getLatestFacebookImage() {
                 return text;
             }, winnerIdx);
 
-            console.log(`Facebook post text: ${fbText.substring(0, 100)}...`);
+            // Store the extracted text
+            fbPostText = extractedText;
+            console.log(`Facebook post text: ${fbPostText.substring(0, 100)}...`);
 
             // Step 5: find the best image from network capture, scoped to the winning article.
             // We query images directly inside the latest article element — this naturally excludes
