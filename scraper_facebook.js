@@ -111,7 +111,10 @@ async function getLatestFacebookImage() {
                 latestPost.querySelector('a[href*="/videos/"]') !== null ||
                 latestPost.querySelector('a[href*="/reel/"]') !== null;
 
-            if (hasVideo) return { isVideo: true };
+            if (hasVideo) {
+                console.log('Latest post is a video.');
+                return { isVideo: true };
+            }
 
             // Extract text content from the post
             const textEl = latestPost.querySelector('[data-testid="post_message"]') ||
@@ -160,7 +163,7 @@ async function getLatestFacebookImage() {
         });
 
         if (postData && postData.isVideo) {
-            process.stderr.write('Latest post is a video. Skipping.\n');
+            console.log('Latest post is a video. Skipping.');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
         }
@@ -184,20 +187,20 @@ async function getLatestFacebookImage() {
             if (bestSrc && bestSize >= 10000) {
                 targetFilename = getFilename(bestSrc);
                 postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
-                process.stderr.write(`Pagelet selected: ${targetFilename} (${bestSize} bytes)\n`);
+                console.log(`Pagelet selected: ${targetFilename} (${bestSize} bytes)`);
             }
         }
 
-        // Store the Facebook post text if available
-        if (postData && postData.text) {
-            fbPostText = postData.text;
-            process.stderr.write(`Facebook post text: ${fbPostText.substring(0, 100)}...\n`);
-        }
+            // Store the Facebook post text if available
+            if (postData && postData.text) {
+                fbPostText = postData.text;
+                console.log(`Facebook post text: ${fbPostText.substring(0, 100)}...`);
+            }
 
         if (!postImageInfo_resolved) {
             // Network capture fallback: hover each article's post-level timestamp link to get the
             // exact datetime from Facebook's tooltip, sort by it, then check the latest for video.
-            process.stderr.write('No pagelet found — using network capture fallback.\n');
+            console.log('No pagelet found — using network capture fallback.');
 
             // Step 1: mark each article's post-level timestamp <a> with a probe attribute
             // so Puppeteer can hover it. Post-level = aria-label matches text, no comment_id in href.
@@ -221,7 +224,7 @@ async function getLatestFacebookImage() {
                 results['bodyChildren'] = bodyChildren;
                 return results;
             });
-            process.stderr.write(`Article selector debug: ${JSON.stringify(articleDebug)}\n`);
+            console.log(`Article selector debug: ${JSON.stringify(articleDebug)}`);
 
             const articleCount = await page.evaluate(() => {
                 // Try multiple selectors for finding posts
@@ -248,7 +251,7 @@ async function getLatestFacebookImage() {
                         }
                     }
                 });
-                process.stderr.write(`Found ${articles.length} articles, marked ${marked} with timestamps\n`);
+                console.log(`Found ${articles.length} articles, marked ${marked} with timestamps`);
                 return articles.length;
             });
 
@@ -259,7 +262,7 @@ async function getLatestFacebookImage() {
                 const selector = `[data-ts-probe="article-${i}"]`;
                 const exists = await page.evaluate((sel) => !!document.querySelector(sel), selector);
                 if (!exists) {
-                    process.stderr.write(`article[${i}]: no post-level timestamp link\n`);
+                    console.log(`article[${i}]: no post-level timestamp link`);
                     articleTimestamps[i] = 0;
                     continue;
                 }
@@ -278,10 +281,10 @@ async function getLatestFacebookImage() {
                     });
 
                     if (tooltipTs) {
-                        process.stderr.write(`article[${i}]: tooltip="${tooltipTs.text}" ts=${tooltipTs.ts}\n`);
+                        console.log(`article[${i}]: tooltip="${tooltipTs.text}" ts=${tooltipTs.ts}`);
                         articleTimestamps[i] = tooltipTs.ts;
                     } else {
-                        process.stderr.write(`article[${i}]: tooltip not found or unparseable, using relative fallback\n`);
+                        console.log(`article[${i}]: tooltip not found or unparseable, using relative fallback`);
                         // Fall back to relative time approximation
                         const relTs = await page.evaluate((sel) => {
                             const a = document.querySelector(sel);
@@ -301,7 +304,7 @@ async function getLatestFacebookImage() {
                         articleTimestamps[i] = relTs;
                     }
                 } catch (e) {
-                    process.stderr.write(`article[${i}]: hover error — ${e.message}\n`);
+                    console.log(`article[${i}]: hover error — ${e.message}`);
                     articleTimestamps[i] = 0;
                 }
             }
@@ -318,9 +321,9 @@ async function getLatestFacebookImage() {
             // If no timestamps found at all, fall back to DOM order
             if (winnerIdx === -1 && articleCount > 0) {
                 winnerIdx = 0;
-                process.stderr.write('No timestamps resolved — falling back to article[0] (DOM order)\n');
+                console.log('No timestamps resolved — falling back to article[0] (DOM order)');
             }
-            process.stderr.write(`Latest article: index ${winnerIdx}\n`);
+            console.log(`Latest article: index ${winnerIdx}`);
 
             // Step 4: check that article for video signals
             const videoCheck = await page.evaluate((idx) => {
@@ -345,16 +348,16 @@ async function getLatestFacebookImage() {
                 };
             }, winnerIdx);
 
-            process.stderr.write(`Video signals: ${JSON.stringify(videoCheck)}\n`);
+            console.log(`Video signals: ${JSON.stringify(videoCheck)}`);
 
             if (videoCheck.noArticle) {
-                process.stderr.write('Article not found — bailing.\n');
+                console.log('Article not found — bailing.');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
 
             if (Object.values(videoCheck).some(Boolean)) {
-                process.stderr.write('Latest post is a video. Skipping.\n');
+                console.log('Latest post is a video. Skipping.');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
@@ -386,7 +389,7 @@ async function getLatestFacebookImage() {
                 return text;
             }, winnerIdx);
 
-            process.stderr.write(`Facebook post text: ${fbText.substring(0, 100)}...\n`);
+            console.log(`Facebook post text: ${fbText.substring(0, 100)}...`);
 
             // Step 5: find the best image from network capture, scoped to the winning article.
             // We query images directly inside the latest article element — this naturally excludes
@@ -435,10 +438,10 @@ async function getLatestFacebookImage() {
                 return results;
             }, winnerIdx);
 
-            process.stderr.write(`[FALLBACK] Images inside winning article: ${JSON.stringify((articleImageInfo || []).map(x => x.fn))}\n`);
+            console.log(`[FALLBACK] Images inside winning article: ${JSON.stringify((articleImageInfo || []).map(x => x.fn))}`);
 
             if (!articleImageInfo || articleImageInfo.length === 0) {
-                process.stderr.write('No images found inside winning article.\n');
+                console.log('No images found inside winning article.');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
@@ -447,7 +450,7 @@ async function getLatestFacebookImage() {
             let bestFn = null, bestPhotoHref = null, bestSrc = null, bestSize = 0;
             for (const { fn, photoHref, src } of articleImageInfo) {
                 const size = capturedImages[fn] ? capturedImages[fn].length : 0;
-                process.stderr.write(`[FALLBACK]   ${fn}: ${size} bytes captured\n`);
+                console.log(`[FALLBACK]   ${fn}: ${size} bytes captured`);
                 if (size > bestSize) {
                     bestSize = size;
                     bestFn = fn;
@@ -457,13 +460,13 @@ async function getLatestFacebookImage() {
             }
 
             if (!bestFn || bestSize < 5000) {
-                process.stderr.write('No suitable post image captured from winning article.\n');
+                console.log('No suitable post image captured from winning article.');
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
             targetFilename = bestFn;
             postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
-            process.stderr.write(`Network fallback selected: ${targetFilename} (${bestSize} bytes)${bestPhotoHref ? ' [photo link found]' : ''}\n`);
+            console.log(`Network fallback selected: ${targetFilename} (${bestSize} bytes)${bestPhotoHref ? ' [photo link found]' : ''}`);
         }
 
         // Phase 3: open the modal viewer by clicking the post image, then capture the
