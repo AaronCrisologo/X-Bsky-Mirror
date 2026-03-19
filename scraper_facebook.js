@@ -599,6 +599,13 @@ async function getLatestFacebookImage() {
 
         page.off('response', modalResponseListener);
 
+        // Validate we have a target filename
+        if (!targetFilename) {
+            process.stderr.write('No target filename selected — cannot retrieve image.\n');
+            console.log(JSON.stringify({ error: 'no_image_selected' }));
+            return;
+        }
+
         // Pick the best buffer: full-res from viewer if larger than feed capture, else feed capture
         const feedBuffer = capturedImages[targetFilename];
 
