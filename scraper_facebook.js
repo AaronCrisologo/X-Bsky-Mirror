@@ -90,7 +90,7 @@ async function getLatestFacebookImage() {
         await new Promise(r => setTimeout(r, 2000));
 
         // Phase 2: try pagelet-based discovery, fall back to network capture order
-        const postImageInfo = await page.evaluate(() => {
+        const postData = await page.evaluate(() => {
             
             // Try known pagelet names in order of preference
             const pageletNames = ['FeedUnit_0', 'TimelineFeedUnit_0', 'ProfileTimelineFeedUnit_0'];
@@ -112,6 +112,20 @@ async function getLatestFacebookImage() {
                 latestPost.querySelector('a[href*="/reel/"]') !== null;
 
             if (hasVideo) return { isVideo: true };
+
+            // Extract text content from the post
+            const textEl = latestPost.querySelector('[data-testid="post_message"]') ||
+                           latestPost.querySelector('.xdj266r.x11i5rnm.xat24cr.x1mh8g0r.x1vvkbs') ||
+                           latestPost.querySelector('div[data-ad-preview="message"]') ||
+                           latestPost.querySelector('[data-ad-comet-preview="message"]');
+            
+            let postText = '';
+            if (textEl) {
+                // Get text content, preserving line breaks
+                postText = textEl.innerText.trim();
+                // Clean up excessive whitespace
+                postText = postText.replace(/\s+/g, ' ').trim();
+            }
 
             const imgs = Array.from(latestPost.querySelectorAll('img[src*="fbcdn"]'));
             if (!imgs.length) return null;
@@ -142,10 +156,10 @@ async function getLatestFacebookImage() {
                 !c.src.includes('p60x60')
             );
 
-            return { candidates: filtered.length ? filtered : candidates };
+            return { candidates: filtered.length ? filtered : candidates, text: postText };
         });
 
-        if (postImageInfo && postImageInfo.isVideo) {
+        if (postData && postData.isVideo) {
             process.stderr.write('Latest post is a video. Skipping.\n');
             console.log(JSON.stringify({ error: 'no_image_found' }));
             return;
@@ -153,11 +167,12 @@ async function getLatestFacebookImage() {
 
         let targetFilename = null;
         let postImageInfo_resolved = null;
+        let fbPostText = '';
 
-        if (postImageInfo && postImageInfo.candidates && postImageInfo.candidates.length > 0) {
+        if (postData && postData.candidates && postData.candidates.length > 0) {
             // Pagelet path: pick largest captured buffer among DOM candidates
             let bestSrc = null, bestPhotoHref = null, bestSize = 0;
-            for (const { src, photoHref } of postImageInfo.candidates) {
+            for (const { src, photoHref } of postData.candidates) {
                 const filename = getFilename(src);
                 const size = capturedImages[filename] ? capturedImages[filename].length : 0;
                 if (size > bestSize) {
@@ -171,6 +186,12 @@ async function getLatestFacebookImage() {
                 postImageInfo_resolved = { src: bestSrc, photoHref: bestPhotoHref };
                 process.stderr.write(`Pagelet selected: ${targetFilename} (${bestSize} bytes)\n`);
             }
+        }
+
+        // Store the Facebook post text if available
+        if (postData && postData.text) {
+            fbPostText = postData.text;
+            process.stderr.write(`Facebook post text: ${fbPostText.substring(0, 100)}...\n`);
         }
 
         if (!postImageInfo_resolved) {
@@ -337,6 +358,35 @@ async function getLatestFacebookImage() {
                 console.log(JSON.stringify({ error: 'no_image_found' }));
                 return;
             }
+
+            // Step 5: Extract text from the winning article
+            const fbText = await page.evaluate((idx) => {
+                // Try multiple selectors for finding posts
+                let articles = Array.from(document.querySelectorAll('[role="article"]'));
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('[data-pagelet^="FeedUnit"]'));
+                }
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('div[tabindex="-1"][data-visualcompletion="ignore-dynamic"]'));
+                }
+                const article = articles[idx];
+                if (!article) return '';
+
+                // Try multiple selectors for post text
+                const textEl = article.querySelector('[data-testid="post_message"]') ||
+                              article.querySelector('.xdj266r.x11i5rnm.xat24cr.x1mh8g0r.x1vvkbs') ||
+                              article.querySelector('div[data-ad-preview="message"]') ||
+                              article.querySelector('[data-ad-comet-preview="message"]');
+                
+                if (!textEl) return '';
+                
+                let text = textEl.innerText.trim();
+                // Clean up whitespace
+                text = text.replace(/\s+/g, ' ').trim();
+                return text;
+            }, winnerIdx);
+
+            process.stderr.write(`Facebook post text: ${fbText.substring(0, 100)}...\n`);
 
             // Step 5: find the best image from network capture, scoped to the winning article.
             // We query images directly inside the latest article element — this naturally excludes
@@ -559,7 +609,7 @@ async function getLatestFacebookImage() {
             return;
         }
 
-        console.log(JSON.stringify({ imagePath: OUTPUT_FILE }));
+        console.log(JSON.stringify({ imagePath: OUTPUT_FILE, text: fbPostText }));
 
     } catch (error) {
         process.stderr.write(`Facebook scraper error: ${error.message}\n`);

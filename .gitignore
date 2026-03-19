@@ -48,6 +48,9 @@ temp_manga.jpg
 Thumbs.db
 
 # Project specific
+
+# Test files
+test_*.py
 debug_*.py
 *.log
 *.tmp

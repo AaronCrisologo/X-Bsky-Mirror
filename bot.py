@@ -28,6 +28,8 @@ def get_latest_tweet_data():
         my_env["PYTHONIOENCODING"] = "utf-8"
         my_env["PYTHONUTF8"] = "1"
 
+        print("🔍 [X] Starting Twitter/X scraper...")
+
         result = subprocess.run(
             ['node', 'scraper.js'],
             capture_output=True,
@@ -38,57 +40,50 @@ def get_latest_tweet_data():
         
         if result.stderr:
             stderr_text = result.stderr.decode('utf-8', errors='ignore')
-            print(f"Scraper stderr: {stderr_text}")
+            print(f"⚠️  [X] Scraper stderr: {stderr_text}")
 
         if not result.stdout:
+            print("❌ [X] No stdout from scraper.")
             return None
 
         json_output = result.stdout.decode('utf-8', errors='strict').strip()
 
         if "{" not in json_output:
+            print("❌ [X] Output doesn't contain JSON.")
             return None
 
         data = json.loads(json_output)
         if "error" in data:
-            print(f"Scraper error: {data['error']}")
+            print(f"❌ [X] Scraper error: {data['error']}")
             return None
 
+        tweet_count = len(data.get('images', []))
+        has_video = data.get('hasVideo', False)
+        print(f"✅ [X] Tweet scraped: text_len={len(data.get('text', ''))}, images={tweet_count}, video={has_video}")
         return data
 
     except subprocess.TimeoutExpired:
-        print("Scraper timed out.")
+        print("⏰ [X] Scraper timed out.")
         return None
     except UnicodeDecodeError as e:
-        print(f"Encoding error: {e}")
+        print(f"❌ [X] Encoding error: {e}")
         return None
     except Exception as e:
-        print(f"Error running scraper: {e}")
+        print(f"💥 [X] Error running scraper: {e}")
         return None
 
 
 def get_facebook_image():
     """
-    Runs scraper_facebook.js to grab the latest post image from the Facebook page.
-    Returns the local file path (e.g. 'facebook_img.jpg') on success, or None on failure.
-
-    Requires two GitHub Actions secrets:
-      FB_C_USER  — the value of the 'c_user' cookie from a logged-in Facebook session
-      FB_XS      — the value of the 'xs' cookie from a logged-in Facebook session
-
-    To get these: log into Facebook in Chrome → F12 → Application tab →
-    Cookies → https://www.facebook.com → copy 'c_user' and 'xs' values.
+    Runs scraper_facebook.js to grab the latest post image and text from the Facebook page.
+    Returns a tuple (image_path, fb_text) on success, or (None, None) on failure.
     """
     try:
         my_env = os.environ.copy()
         my_env["PYTHONIOENCODING"] = "utf-8"
         my_env["PYTHONUTF8"] = "1"
-        # FB_C_USER and FB_XS are passed through automatically since we use os.environ.copy().
-        # Just make sure they are set as GitHub Actions secrets and referenced in your workflow:
-        #   env:
-        #     FB_C_USER: ${{ secrets.FB_C_USER }}
-        #     FB_XS: ${{ secrets.FB_XS }}
 
-        print("Trying Facebook scraper for image...")
+        print("🔍 [FB] Starting Facebook scraper for image and text...")
 
         result = subprocess.run(
             ['node', 'scraper_facebook.js'],
@@ -100,58 +95,150 @@ def get_facebook_image():
 
         if result.stderr:
             stderr_text = result.stderr.decode('utf-8', errors='ignore')
-            print(f"Facebook scraper stderr: {stderr_text}")
+            print(f"⚠️  [FB] Scraper stderr: {stderr_text}")
 
         if not result.stdout:
-            print("Facebook scraper returned no output.")
-            return None
+            print("❌ [FB] Scraper returned no output.")
+            return None, None
 
         json_output = result.stdout.decode('utf-8', errors='strict').strip()
 
         if "{" not in json_output:
-            print("Facebook scraper output was not JSON.")
-            return None
+            print("❌ [FB] Scraper output was not JSON.")
+            return None, None
 
         data = json.loads(json_output)
 
         if "error" in data:
-            print(f"Facebook scraper error: {data['error']}")
-            return None
+            print(f"❌ [FB] Scraper error: {data['error']}")
+            return None, None
 
         image_path = data.get("imagePath")
+        fb_text = data.get("text", "")
+        
+        if fb_text:
+            # Clean up Facebook text for comparison
+            fb_text = fb_text.strip()
+            # Remove excessive whitespace
+            fb_text = re.sub(r'\s+', ' ', fb_text)
+            print(f"📝 [FB] Text extracted: {fb_text[:150]}...")
+        else:
+            print("⚠️  [FB] No text extracted from Facebook post.")
+        
         if image_path and os.path.exists(image_path):
-            print(f"✅ Facebook image retrieved: {image_path}")
-            return image_path
+            print(f"✅ [FB] Image retrieved: {image_path}")
+            return image_path, fb_text
 
-        print("Facebook scraper succeeded but image file not found on disk.")
-        return None
+        print("❌ [FB] Image file not found on disk.")
+        return None, fb_text
 
     except subprocess.TimeoutExpired:
-        print("Facebook scraper timed out.")
-        return None
+        print("⏰ [FB] Scraper timed out.")
+        return None, None
     except Exception as e:
-        print(f"Facebook scraper exception: {e}")
-        return None
+        print(f"💥 [FB] Scraper exception: {e}")
+        return None, None
+
+
+# === Text comparison utilities ===
+def normalize_text_for_comparison(text):
+    """Normalize text for fuzzy matching: lowercase, remove extra whitespace, strip URLs."""
+    if not text:
+        return ""
+    # Convert to lowercase
+    text = text.lower()
+    # Remove URLs (they may differ slightly)
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text)
+    # Strip leading/trailing whitespace
+    return text.strip()
+
+
+def texts_match(twitter_text, facebook_text, threshold=0.8):
+    """
+    Check if Twitter and Facebook texts match.
+    Uses exact match first, then fuzzy matching based on word overlap.
+    Returns True if similarity >= threshold.
+    """
+    if not twitter_text or not facebook_text:
+        print(f"⚠️  [MATCH] Cannot compare: twitter_text={'✓' if twitter_text else '✗'}, facebook_text={'✓' if facebook_text else '✗'}")
+        return False
+    
+    # Normalize both texts
+    norm_twitter = normalize_text_for_comparison(twitter_text)
+    norm_facebook = normalize_text_for_comparison(facebook_text)
+    
+    print(f"🔍 [MATCH] Comparing texts:")
+    print(f"   Twitter (normalized): {norm_twitter[:150]}...")
+    print(f"   Facebook (normalized): {norm_facebook[:150]}...")
+    
+    # Exact match after normalization
+    if norm_twitter == norm_facebook:
+        print("✅ [MATCH] Exact match after normalization!")
+        return True
+    
+    # Check if one is contained in the other (at least 80% of the shorter text)
+    words_twitter = set(norm_twitter.split())
+    words_facebook = set(norm_facebook.split())
+    
+    if not words_twitter or not words_facebook:
+        print("⚠️  [MATCH] One or both texts have no words after normalization.")
+        return False
+    
+    # Calculate Jaccard similarity (intersection over union)
+    intersection = len(words_twitter.intersection(words_facebook))
+    union = len(words_twitter.union(words_facebook))
+    
+    if union == 0:
+        print("⚠️  [MATCH] Union of words is empty.")
+        return False
+    
+    similarity = intersection / union
+    
+    # Also check if the shorter text is mostly contained in the longer
+    shorter_len = min(len(words_twitter), len(words_facebook))
+    shorter_containment = intersection / shorter_len if shorter_len > 0 else 0
+    
+    print(f"📊 [MATCH] Stats: intersection={intersection}, union={union}, similarity={similarity:.2%}, shorter_containment={shorter_containment:.2%}")
+    
+    if shorter_containment >= threshold:
+        print(f"✅ [MATCH] Shorter containment ({shorter_containment:.2%}) >= threshold ({threshold:.2%})")
+        return True
+    
+    if similarity >= threshold:
+        print(f"✅ [MATCH] Jaccard similarity ({similarity:.2%}) >= threshold ({threshold:.2%})")
+        return True
+    
+    print(f"❌ [MATCH] No match. Similarity {similarity:.2%} < {threshold:.2%}")
+    return False
 
 
 # === Bluesky: Check if already posted ===
 def is_already_posted(client, new_text):
     try:
+        print(f"🔍 [DEDUP] Checking if post already exists in Bluesky feed...")
         response = client.get_author_feed(actor=BSKY_HANDLE, limit=5, filter='posts_no_replies')
         
         new_text_clean = new_text.strip().lower()
+        print(f"   [DEDUP] Checking against: {new_text_clean[:100]}...")
 
         for view in response.feed:
             existing_text = view.post.record.text.strip().lower()
             
             if existing_text == new_text_clean:
+                print(f"⚠️  [DEDUP] Exact match found! Skipping duplicate.")
                 return True
             
             if len(new_text_clean) > 50 and new_text_clean[:100] == existing_text[:100]:
+                print(f"⚠️  [DEDUP] Partial match (first 100 chars) found! Skipping duplicate.")
                 return True
-                
+        
+        print(f"✅ [DEDUP] No duplicate found.")
+
     except Exception as e:
-        print(f"Error checking Bluesky feed: {e}")
+        print(f"❌ [DEDUP] Error checking Bluesky feed: {e}")
     return False
 
 
@@ -190,9 +277,11 @@ def main():
         tweet_data = get_latest_tweet_data()
 
     if not tweet_data:
-        print("No tweet data received. Skipping.")
+        print("❌ [MAIN] No tweet data received. Skipping.")
         return
 
+    print(f"📊 [MAIN] Tweet data received: hasVideo={tweet_data.get('hasVideo', False)}, image_count={len(tweet_data.get('images', []))}")
+    
     tweet_time_str = tweet_data.get('time', '')
     is_recent = False
 
@@ -201,6 +290,10 @@ def main():
         now = datetime.datetime.now(datetime.timezone.utc)
         if (now - tweet_datetime).days < 2:
             is_recent = True
+        else:
+            print(f"⏰ [MAIN] Tweet is too old: {(now - tweet_datetime).days} days")
+    else:
+        print("⚠️  [MAIN] No timestamp in tweet data or marked as 'post'")
 
     raw_text = tweet_data.get('text', '') if tweet_data else ""
     post_text = "\n".join([line.strip() for line in raw_text.splitlines()]).strip()
@@ -211,6 +304,8 @@ def main():
     
     while "\n\n\n" in post_text:
         post_text = post_text.replace("\n\n\n", "\n\n")
+    
+    print(f"📝 [MAIN] Processed Twitter text ({len(post_text)} chars): {post_text[:150]}...")
     
     has_new_content = (
         tweet_data and
@@ -232,17 +327,27 @@ def main():
 
             # Image priority: tweet images → Facebook (logged in, full-res) → local fallback
             if has_video or not image_urls:
-                fb_image_path = get_facebook_image()
-
-                if fb_image_path:
+                print("🔍 [MAIN] No tweet images or video detected. Fetching Facebook image...")
+                fb_image_path, fb_text = get_facebook_image()
+                
+                # Only use Facebook image if the text matches the Twitter text
+                if fb_image_path and fb_text and texts_match(post_text, fb_text):
+                    print("✅ [MAIN] Facebook image matches Twitter text. Using Facebook image.")
                     with Image.open(fb_image_path) as img:
                         w, h = img.size
                         aspect_ratios = [{"width": w, "height": h}]
                     with open(fb_image_path, 'rb') as f:
                         images_to_upload = [f.read()]
                     final_alt_text = "Update"
-                else:
-                    print("Facebook image unavailable. Using local fallback.")
+                elif fb_image_path:
+                    print("⚠️  [MAIN] Facebook image does NOT match Twitter text. Skipping Facebook image.")
+                    print(f"   [TWITTER] {post_text[:150]}...")
+                    print(f"   [FACEBOOK] {fb_text[:150] if fb_text else '(no text)'}...")
+                    # Fall through to local fallback
+                    fb_image_path = None
+                
+                if not fb_image_path:
+                    print("🔄 [MAIN] Using local fallback image.")
                     chosen_fallback, fallback_alt = get_fallback_data(post_text)
                     final_alt_text = fallback_alt
 
@@ -252,6 +357,9 @@ def main():
                             aspect_ratios = [{"width": w, "height": h}]
                         with open(chosen_fallback, 'rb') as f:
                             images_to_upload = [f.read()]
+                        print(f"✅ [MAIN] Fallback image loaded: {chosen_fallback}")
+                    else:
+                        print(f"❌ [MAIN] Fallback image not found: {chosen_fallback}")
             else:
                 for i in range(len(image_urls)):
                     filename = f"tweet_img_{i}.jpg"
@@ -310,6 +418,7 @@ def main():
             # Send the post
             try:
                 if len(images_to_upload) >= 1:
+                    print(f"📤 [MAIN] Posting to Bluesky with {len(images_to_upload)} image(s)...")
                     client.send_images(
                         text=post_text_with_facets,
                         images=images_to_upload,
@@ -317,29 +426,39 @@ def main():
                         image_aspect_ratios=aspect_ratios
                     )
                 else:
+                    print("📤 [MAIN] Posting text-only to Bluesky...")
                     client.send_post(post_text_with_facets)
                 
-                print(f"✅ Posted successfully!")
+                print(f"✅ [MAIN] Posted successfully!")
 
             except Exception as e:
-                print(f"❌ Post failed at API level: {e}")
+                print(f"❌ [MAIN] Post failed at API level: {e}")
 
             # Cleanup
+            cleanup_count = 0
             for i in range(len(image_urls)):
                 img_file = f"tweet_img_{i}.jpg"
                 if os.path.exists(img_file):
                     os.remove(img_file)
+                    cleanup_count += 1
 
             if os.path.exists("facebook_img.jpg"):
                 os.remove("facebook_img.jpg")
+                cleanup_count += 1
             
             if os.path.exists("temp_manga.jpg"):
                 os.remove("temp_manga.jpg")
+                cleanup_count += 1
+            
+            if cleanup_count > 0:
+                print(f"🧹 [MAIN] Cleaned up {cleanup_count} temporary file(s)")
 
         except Exception as e:
-            print(f"❌ Bluesky processing failed: {e}")
+            print(f"❌ [MAIN] Bluesky processing failed: {e}")
+            import traceback
+            traceback.print_exc()
     else:
-        print("No new content to post.")
+        print("ℹ️  [MAIN] No new content to post.")
 
 if __name__ == "__main__":
     main()
