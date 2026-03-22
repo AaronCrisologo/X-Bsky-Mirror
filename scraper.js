@@ -81,12 +81,40 @@ async function getLatestTweet(username) {
                             });
                         }
                         
+                        // Extract images (both regular photos and video thumbnails)
+                        let imageUrls = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src);
+                        
+                        // If it's a video, also try to extract the thumbnail/poster image
+                        if (hasVideo) {
+                            const videoPlayer = article.querySelector('[data-testid="videoPlayer"]');
+                            if (videoPlayer) {
+                                // Try to find poster attribute on video element
+                                const videoEl = videoPlayer.querySelector('video');
+                                if (videoEl && videoEl.poster) {
+                                    imageUrls.push(videoEl.poster);
+                                } else {
+                                    // Try to find a background image on the video player
+                                    const bgStyle = videoPlayer.getAttribute('style') || '';
+                                    const bgMatch = bgStyle.match(/background-image:\s*url\(['"]?(.+?)['"]?\)/);
+                                    if (bgMatch && bgMatch[1]) {
+                                        imageUrls.push(bgMatch[1]);
+                                    } else {
+                                        // Look for any img inside the video player that might be a thumbnail
+                                        const thumbImg = videoPlayer.querySelector('img');
+                                        if (thumbImg && thumbImg.src) {
+                                            imageUrls.push(thumbImg.src);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
                         results.push({
                             text: tweetText,
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
                             hasVideo: hasVideo,
-                            images: Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
+                            images: imageUrls
                         });
                     }
                 });

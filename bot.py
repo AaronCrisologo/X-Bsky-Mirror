@@ -307,12 +307,19 @@ def main():
     
     print(f"📝 [MAIN] Processed Twitter text ({len(post_text)} chars): {post_text[:150]}...")
     
+    # TEMPORARILY DISABLE DUPLICATE CHECK FOR TESTING
+    # has_new_content = (
+    #     tweet_data and
+    #     post_text and
+    #     is_recent and
+    #     post_text != last_posted_text and
+    #     not is_already_posted(client, post_text)
+    # )
     has_new_content = (
         tweet_data and
         post_text and
-        is_recent and
-        post_text != last_posted_text and
-        not is_already_posted(client, post_text)
+        is_recent
+        # Duplicate check disabled for testing
     )
 
     if has_new_content:
@@ -325,9 +332,9 @@ def main():
             aspect_ratios = []
             final_alt_text = "Update"
 
-            # Image priority: tweet images → Facebook (logged in, full-res) → local fallback
-            if has_video or not image_urls:
-                print("🔍 [MAIN] No tweet images or video detected. Fetching Facebook image...")
+            # Image priority: tweet images (including video thumbnails) → Facebook (logged in, full-res) → local fallback
+            if not image_urls:
+                print("🔍 [MAIN] No tweet images detected. Fetching Facebook image...")
                 fb_image_path, fb_text = get_facebook_image()
                 
                 # Always log what we got from Facebook
@@ -367,6 +374,7 @@ def main():
                     else:
                         print(f"❌ [MAIN] Fallback image not found: {chosen_fallback}")
             else:
+                print(f"✅ [MAIN] Using {len(image_urls)} image(s) from tweet (video thumbnail={has_video}).")
                 for i in range(len(image_urls)):
                     filename = f"tweet_img_{i}.jpg"
                     if os.path.exists(filename):
