@@ -114,18 +114,41 @@ function downloadFile(url, destPath, redirectDepth = 0) {
 
 // ─── Video URL picker ─────────────────────────────────────────────────────────
 
-function pickBestVideoUrl(urls) {
-    log('🎬', 'VIDEO', `Ranking ${urls.length} candidate URL(s):`);
+function pickBestVideoUrl(urls, videoId) {
+    log('🎬', 'VIDEO', `Ranking ${urls.length} candidate URL(s) | target videoId: ${videoId || '(unknown)'}`);
     urls.forEach((u, i) => log('  •', `URL[${i}]`, u));
 
-    // Prefer real video over animated GIFs hosted at /tweet_video/
-    const mainVideos = urls.filter(u => !u.includes('/tweet_video/'));
-    const candidates = mainVideos.length > 0 ? mainVideos : urls;
-
-    if (mainVideos.length === 0) {
-        ghaWarning('Only animated GIF (tweet_video) URLs found — using those as fallback');
+    // Step 1: filter to the correct tweet's video using its ID (avoids picking
+    // videos from other posts that scrolled into view during scraping)
+    let candidates = urls;
+    if (videoId) {
+        const byId = urls.filter(u => u.includes(`/${videoId}/`));
+        if (byId.length > 0) {
+            log('🔍', 'VIDEO', `Filtered to ${byId.length} URL(s) matching videoId ${videoId}`);
+            candidates = byId;
+        } else {
+            ghaWarning(`No URLs matched videoId ${videoId} — using all candidates`);
+        }
     }
 
+    // Step 2: drop audio-only tracks (/aud/mp4a/) — keep only video tracks
+    const videoOnly = candidates.filter(u => !u.includes('/aud/mp4a/'));
+    if (videoOnly.length > 0) {
+        log('🎞️', 'VIDEO', `Dropped ${candidates.length - videoOnly.length} audio-only track(s)`);
+        candidates = videoOnly;
+    } else {
+        ghaWarning('No video-track URLs after filtering audio — keeping audio tracks as fallback');
+    }
+
+    // Step 3: prefer real video over animated GIFs (/tweet_video/)
+    const mainVideos = candidates.filter(u => !u.includes('/tweet_video/'));
+    if (mainVideos.length > 0) {
+        candidates = mainVideos;
+    } else {
+        ghaWarning('Only animated GIF (tweet_video) URLs remain — using those as fallback');
+    }
+
+    // Step 4: rank by resolution (highest pixel area wins)
     const ranked = [...candidates].sort((a, b) => {
         const matchA = a.match(/(\d{3,4})x(\d{3,4})/);
         const matchB = b.match(/(\d{3,4})x(\d{3,4})/);
@@ -229,11 +252,37 @@ async function getLatestTweet(username) {
                         processNode(textEl);
                     }
 
+                    // Extract video ID from the video player src or thumbnail URL.
+                    // Thumbnails use pattern: ext_tw_video_thumb/{VIDEO_ID}/
+                    // Video player <video> src uses: ext_tw_video/{VIDEO_ID}/
+                    let videoId = null;
+                    if (hasVideo) {
+                        const videoEl = article.querySelector('video');
+                        if (videoEl && videoEl.src) {
+                            const m = videoEl.src.match(/ext_tw_video\/(\d+)\//);
+                            if (m) videoId = m[1];
+                        }
+                        // Fallback: read ID from the poster/thumbnail attribute
+                        if (!videoId && videoEl && videoEl.poster) {
+                            const m = videoEl.poster.match(/ext_tw_video_thumb\/(\d+)\//);
+                            if (m) videoId = m[1];
+                        }
+                        // Fallback: read from any img src in the article that looks like a video thumb
+                        if (!videoId) {
+                            const imgs = Array.from(article.querySelectorAll('img'));
+                            for (const img of imgs) {
+                                const m = (img.src || '').match(/ext_tw_video_thumb\/(\d+)\//);
+                                if (m) { videoId = m[1]; break; }
+                            }
+                        }
+                    }
+
                     results.push({
                         text:     tweetText,
                         time:     timeEl.getAttribute('datetime'),
                         isPinned,
                         hasVideo,
+                        videoId,
                         images:   Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
                     });
                 });
@@ -277,7 +326,8 @@ async function getLatestTweet(username) {
                     ghaWarning(`${label}: no MP4 URLs available yet`);
                     return false;
                 }
-                const bestUrl = pickBestVideoUrl(Array.from(capturedVideoUrls));
+                log('ℹ️', 'VIDEO', `Tweet videoId: ${best.videoId || '(not detected)'}`);
+                const bestUrl = pickBestVideoUrl(Array.from(capturedVideoUrls), best.videoId);
                 const dlTimer = timer();
                 try {
                     await downloadFile(bestUrl, 'tweet_video.mp4');
