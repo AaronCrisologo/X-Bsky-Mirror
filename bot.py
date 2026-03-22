@@ -52,7 +52,7 @@ SCHEDULED_TIMES = [
     datetime.time(hour=22, minute=10)
 ]
 
-FETCH_TIMEOUT = 60  # Max seconds to wait for scraper (just in case)
+FETCH_TIMEOUT = 30  # Max seconds to wait for scraper (just in case)
 
 def get_latest_tweet_data():
     gha_group("🕷️  Twitter/X Scraper")
@@ -504,12 +504,34 @@ def main():
             try:
                 if video_data:
                     video_size_kb = len(video_data) / 1024
+                    # Read actual video dimensions so Bluesky displays the correct aspect ratio
+                    video_aspect_ratio = None
+                    try:
+                        import subprocess as sp
+                        probe = sp.run(
+                            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                             '-show_entries', 'stream=width,height',
+                             '-of', 'csv=p=0', video_path],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        if probe.returncode == 0 and probe.stdout.strip():
+                            w, h = map(int, probe.stdout.strip().split(','))
+                            video_aspect_ratio = {"width": w, "height": h}
+                            log("📐", "MAIN", f"Video dimensions: {w}x{h}")
+                        else:
+                            log("⚠️", "MAIN", f"ffprobe failed: {probe.stderr.strip()}")
+                    except Exception as e:
+                        log("⚠️", "MAIN", f"Could not probe video dimensions: {e}")
+
                     log("📤", "MAIN", f"Posting to Bluesky with video ({video_size_kb:.1f} KB)...")
-                    client.send_video(
+                    send_kwargs = dict(
                         text=post_text_with_facets,
                         video=video_data,
                         video_alt=final_alt_text,
                     )
+                    if video_aspect_ratio:
+                        send_kwargs['video_aspect_ratio'] = video_aspect_ratio
+                    client.send_video(**send_kwargs)
                 elif len(images_to_upload) >= 1:
                     log("📤", "MAIN", f"Posting to Bluesky with {len(images_to_upload)} image(s)...")
                     client.send_images(
