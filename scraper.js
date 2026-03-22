@@ -320,41 +320,53 @@ async function getLatestTweet(username) {
                             if (!videoUrl) {
                                 ghaWarning('No #EXT-X-MAP .mp4 URI found in child playlist');
                             } else {
-                                log('✅', 'VIDEO', `Resolved: ${videoUrl}`);
-                                log('⬇️', 'VIDEO', `Downloading via https: ${videoUrl}`);
-                                const dlTimer = timer();
-                                // mp4 URL is tokenized — no cookies needed, plain https.get() works.
-                                // page.goto() hangs on media URLs because Chrome streams them
-                                // and never reaches networkidle0.
-                                await new Promise((resolve) => {
+                                // videoUrl is the CMAF init segment (ftyp+moov boxes, ~1KB).
+                                // The actual video frames are in the .m4s chunks listed in the playlist.
+                                // We must concatenate: init.mp4 + chunk1.m4s + chunk2.m4s + ...
+                                const baseUrl = best_stream.url.substring(0, best_stream.url.lastIndexOf('/') + 1);
+
+                                // Collect all segment URLs: init segment first, then .m4s chunks in order
+                                const segmentUrls = [videoUrl];
+                                for (const line of (childBody || '').split('\n').map(l => l.trim())) {
+                                    if (!line.startsWith('#') && line.includes('.m4s')) {
+                                        segmentUrls.push(line.startsWith('https://') ? line : `https://video.twimg.com${line}`);
+                                    }
+                                }
+                                log('ℹ️', 'VIDEO', `Downloading ${segmentUrls.length} segment(s): 1 init + ${segmentUrls.length - 1} chunks`);
+
+                                const fetchSegment = (url) => new Promise((resolve, reject) => {
                                     const https = require('https');
                                     const chunks = [];
-                                    const req = https.get(videoUrl, res => {
-                                        log('📡', 'VIDEO', `HTTP ${res.statusCode} — Content-Length: ${res.headers['content-length'] || 'unknown'}`);
+                                    const req = https.get(url, res => {
                                         if (res.statusCode !== 200) {
-                                            ghaError(`Video download HTTP ${res.statusCode}`);
                                             res.resume();
-                                            resolve();
+                                            reject(new Error(`HTTP ${res.statusCode} for ${url}`));
                                             return;
                                         }
-                                        res.on('data', chunk => chunks.push(chunk));
-                                        res.on('end', () => {
-                                            const buffer = Buffer.concat(chunks);
-                                            const sizeKb = (buffer.length / 1024).toFixed(1);
-                                            if (buffer.length < 10000) {
-                                                ghaWarning(`Downloaded only ${sizeKb} KB — may be an error response`);
-                                                log('🔬', 'VIDEO', `First 300 bytes: ${buffer.slice(0, 300).toString('utf8')}`);
-                                            } else {
-                                                fs.writeFileSync('tweet_video.mp4', buffer);
-                                                log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()}`);
-                                                best.videoPath = 'tweet_video.mp4';
-                                            }
-                                            resolve();
-                                        });
+                                        res.on('data', c => chunks.push(c));
+                                        res.on('end', () => resolve(Buffer.concat(chunks)));
                                     });
-                                    req.on('error', e => { ghaError(`Video download error: ${e.message}`); resolve(); });
-                                    req.setTimeout(120000, () => { ghaError('Video download timed out after 120s'); req.destroy(); resolve(); });
+                                    req.on('error', reject);
+                                    req.setTimeout(30000, () => { req.destroy(); reject(new Error(`Timeout: ${url}`)); });
                                 });
+
+                                const dlTimer = timer();
+                                try {
+                                    const buffers = [];
+                                    for (let i = 0; i < segmentUrls.length; i++) {
+                                        const buf = await fetchSegment(segmentUrls[i]);
+                                        buffers.push(buf);
+                                        if (i === 0) log('ℹ️', 'VIDEO', `Init segment: ${(buf.length / 1024).toFixed(1)} KB`);
+                                        else if (i % 5 === 0) log('ℹ️', 'VIDEO', `Segments downloaded: ${i}/${segmentUrls.length - 1}`);
+                                    }
+                                    const combined = Buffer.concat(buffers);
+                                    const sizeKb = (combined.length / 1024).toFixed(1);
+                                    fs.writeFileSync('tweet_video.mp4', combined);
+                                    log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()} (${segmentUrls.length} segments)`);
+                                    best.videoPath = 'tweet_video.mp4';
+                                } catch (e) {
+                                    ghaError(`Segment download failed: ${e.message}`);
+                                }
                             }
                         } catch (e) {
                             ghaError(`Child playlist / video download threw: ${e.message}`);
