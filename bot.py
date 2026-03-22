@@ -361,10 +361,9 @@ def main():
     has_new_content = (
         tweet_data and
         post_text and
-        is_recent
-        # TESTING: duplicate checks temporarily disabled
-        # post_text != last_posted_text and
-        # not is_already_posted(client, post_text)
+        is_recent and
+        post_text != last_posted_text and
+        not is_already_posted(client, post_text)
     )
 
     if has_new_content:
