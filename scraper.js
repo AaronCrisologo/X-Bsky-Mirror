@@ -71,92 +71,6 @@ const rawCookies = [
     { domain: '.x.com', name: 'ct0',        value: process.env.X_CT0,        path: '/', secure: true, sameSite: 'Lax' }
 ];
 
-// ─── Resolve real video URL from m3u8 manifest ───────────────────────────────
-// Runs inside page.evaluate so fetch() inherits the page's cookies automatically.
-//
-// Twitter HLS structure:
-//   master.m3u8  →  lists child playlists per quality (bandwidth + resolution)
-//   child.m3u8   →  contains the actual .mp4?tag= URL we want
-
-async function resolveVideoUrl(page, videoId) {
-    const masterUrl = `https://video.twimg.com/ext_tw_video/${videoId}/pu/pl/master.m3u8?tag=12`;
-    log('📋', 'M3U8', `Fetching master playlist: ${masterUrl}`);
-
-    const result = await page.evaluate(async (master) => {
-        const logs = [];
-        try {
-            const masterRes = await fetch(master);
-            logs.push(`Master HTTP ${masterRes.status}`);
-            if (!masterRes.ok) return { error: `Master HTTP ${masterRes.status}`, logs };
-
-            const masterText = await masterRes.text();
-            logs.push(`Master body (${masterText.length} chars):\n${masterText}`);
-
-            // Parse #EXT-X-STREAM-INF entries to find child playlist URLs
-            const lines = masterText.split('\n').map(l => l.trim()).filter(Boolean);
-            const streams = [];
-            for (let i = 0; i < lines.length; i++) {
-                if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
-                    const bwMatch  = lines[i].match(/BANDWIDTH=(\d+)/);
-                    const resMatch = lines[i].match(/RESOLUTION=(\d+x\d+)/);
-                    const childUrl = lines[i + 1];
-                    if (childUrl && !childUrl.startsWith('#')) {
-                        streams.push({
-                            bandwidth:  bwMatch  ? parseInt(bwMatch[1])  : 0,
-                            resolution: resMatch ? resMatch[1] : 'unknown',
-                            url: childUrl.startsWith('https://') ? childUrl : new URL(childUrl, master).href
-                        });
-                    }
-                }
-            }
-
-            logs.push(`Streams found: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
-            if (streams.length === 0) return { error: 'No streams in master playlist', logs };
-
-            // Pick highest bandwidth
-            streams.sort((a, b) => b.bandwidth - a.bandwidth);
-            const best = streams[0];
-            logs.push(`Selected: ${best.resolution} @ ${best.bandwidth} bps → ${best.url}`);
-
-            // Fetch the child playlist
-            const childRes = await fetch(best.url);
-            logs.push(`Child HTTP ${childRes.status}`);
-            if (!childRes.ok) return { error: `Child HTTP ${childRes.status}`, logs };
-
-            const childText = await childRes.text();
-            logs.push(`Child body (${childText.length} chars):\n${childText}`);
-
-            // Find the first non-comment line containing .mp4 — that's the real URL
-            let videoUrl = null;
-            for (const line of childText.split('\n').map(l => l.trim())) {
-                if (!line.startsWith('#') && line.includes('.mp4')) {
-                    videoUrl = line.startsWith('https://') ? line : new URL(line, best.url).href;
-                    break;
-                }
-            }
-
-            if (!videoUrl) return { error: 'No .mp4 line found in child playlist', logs };
-
-            logs.push(`Resolved video URL: ${videoUrl}`);
-            return { videoUrl, resolution: best.resolution, bandwidth: best.bandwidth, logs };
-
-        } catch (e) {
-            return { error: e.message, logs };
-        }
-    }, masterUrl);
-
-    // Print all internal logs
-    (result.logs || []).forEach(l => log('  ·', 'M3U8', l));
-
-    if (result.error) {
-        ghaWarning(`M3U8 resolution failed: ${result.error}`);
-        return null;
-    }
-
-    log('✅', 'M3U8', `Resolved: ${result.resolution} @ ${result.bandwidth} bps`);
-    log('✅', 'M3U8', `URL: ${result.videoUrl}`);
-    return result.videoUrl;
-}
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -181,8 +95,35 @@ async function getLatestTweet(username) {
 
     const page = await browser.newPage();
 
-    // ── Minimal network monitoring (no body reads — avoids hangs) ────────────
+    // ── Network monitoring ────────────────────────────────────────────────────
     let reqTotal = 0, reqFailed = 0;
+
+    // Collect m3u8 master playlist bodies keyed by videoId.
+    // We use page.waitForResponse() inside a persistent listener pattern:
+    // each time an m3u8 lands we read the body immediately (waitForResponse
+    // handles this safely; raw response event handlers do not).
+    const m3u8Bodies = new Map(); // videoId -> playlist text
+
+    const collectM3u8 = () => {
+        page.waitForResponse(
+            res => res.url().includes('video.twimg.com') && res.url().includes('.m3u8'),
+            { timeout: 60000 }
+        ).then(async (res) => {
+            const url = res.url();
+            const m = url.match(/ext_tw_video\/(\d+)\//);
+            const videoId = m ? m[1] : 'unknown';
+            try {
+                const body = await res.text();
+                m3u8Bodies.set(videoId, { url, body });
+                log('📋', 'M3U8', `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}`);
+            } catch (e) {
+                log('⚠️', 'M3U8', `Could not read body for ${url}: ${e.message}`);
+            }
+            collectM3u8(); // re-arm for next m3u8
+        }).catch(() => {}); // timeout or navigation — silently ignore
+    };
+    collectM3u8(); // arm before page loads
+
     page.on('response',      ()    => { reqTotal++; });
     page.on('requestfailed', (req) => {
         reqFailed++;
@@ -299,33 +240,88 @@ async function getLatestTweet(username) {
             if (!best.videoId) {
                 ghaWarning('hasVideo=true but could not extract videoId from DOM — skipping video');
             } else {
-                const videoUrl = await resolveVideoUrl(page, best.videoId);
+                log('ℹ️', 'VIDEO', `Looking up m3u8 for videoId=${best.videoId} (collected: ${m3u8Bodies.size})`);
+                m3u8Bodies.forEach((v, k) => log('  ·', 'VIDEO', `  cached: videoId=${k}`));
 
-                if (videoUrl) {
-                    log('⬇️', 'VIDEO', `Downloading via browser: ${videoUrl}`);
-                    try {
-                        const dlTimer = timer();
-                        const response = await page.goto(videoUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+                const m3u8 = m3u8Bodies.get(best.videoId);
+                if (!m3u8) {
+                    ghaWarning(`No m3u8 cached for videoId=${best.videoId} — bot.py will use image fallback`);
+                } else {
+                    log('📋', 'VIDEO', `Parsing cached m3u8 from ${m3u8.url}`);
 
-                        if (!response || !response.ok()) {
-                            ghaError(`Video HTTP ${response?.status()} — ${videoUrl}`);
-                        } else {
-                            const buffer = await response.buffer();
-                            const sizeKb = (buffer.length / 1024).toFixed(1);
-                            if (buffer.length < 10000) {
-                                ghaWarning(`Response is only ${sizeKb} KB — likely an error page, not a video`);
-                                log('🔬', 'VIDEO', `First 300 bytes: ${buffer.slice(0, 300).toString('utf8')}`);
-                            } else {
-                                fs.writeFileSync('tweet_video.mp4', buffer);
-                                log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()}`);
-                                best.videoPath = 'tweet_video.mp4';
+                    // Parse master playlist — find highest bandwidth child playlist
+                    const lines = m3u8.body.split('').map(l => l.trim()).filter(Boolean);
+                    log('📋', 'VIDEO', `Master playlist body:
+${m3u8.body}`);
+
+                    const streams = [];
+                    for (let i = 0; i < lines.length; i++) {
+                        if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
+                            const bwMatch  = lines[i].match(/BANDWIDTH=(\d+)/);
+                            const resMatch = lines[i].match(/RESOLUTION=(\d+x\d+)/);
+                            const childUrl = lines[i + 1];
+                            if (childUrl && !childUrl.startsWith('#')) {
+                                streams.push({
+                                    bandwidth:  bwMatch  ? parseInt(bwMatch[1]) : 0,
+                                    resolution: resMatch ? resMatch[1] : 'unknown',
+                                    url: childUrl.startsWith('https://') ? childUrl : new URL(childUrl, m3u8.url).href
+                                });
                             }
                         }
-                    } catch (e) {
-                        ghaError(`Video download threw: ${e.message}`);
                     }
-                } else {
-                    ghaWarning('Could not resolve video URL — bot.py will use image fallback');
+
+                    log('ℹ️', 'VIDEO', `Streams: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
+
+                    if (streams.length === 0) {
+                        ghaWarning('No streams found in master playlist');
+                    } else {
+                        streams.sort((a, b) => b.bandwidth - a.bandwidth);
+                        const best_stream = streams[0];
+                        log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps`);
+                        log('⬇️', 'VIDEO', `Fetching child playlist: ${best_stream.url}`);
+
+                        // Fetch child playlist via page.goto (auth cookies included)
+                        try {
+                            const childRes = await page.goto(best_stream.url, { waitUntil: 'networkidle0', timeout: 15000 });
+                            const childBody = childRes ? await childRes.text() : null;
+                            log('📋', 'VIDEO', `Child playlist body:
+${childBody}`);
+
+                            // Find the real .mp4?tag= URL
+                            let videoUrl = null;
+                            for (const line of (childBody || '').split('').map(l => l.trim())) {
+                                if (!line.startsWith('#') && line.includes('.mp4')) {
+                                    videoUrl = line.startsWith('https://') ? line : new URL(line, best_stream.url).href;
+                                    break;
+                                }
+                            }
+
+                            if (!videoUrl) {
+                                ghaWarning('No .mp4 URL found in child playlist');
+                            } else {
+                                log('✅', 'VIDEO', `Resolved: ${videoUrl}`);
+                                const dlTimer = timer();
+                                const response = await page.goto(videoUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+
+                                if (!response || !response.ok()) {
+                                    ghaError(`Video download HTTP ${response?.status()} — ${videoUrl}`);
+                                } else {
+                                    const buffer = await response.buffer();
+                                    const sizeKb = (buffer.length / 1024).toFixed(1);
+                                    if (buffer.length < 10000) {
+                                        ghaWarning(`Response is only ${sizeKb} KB — likely an error page, not a video`);
+                                        log('🔬', 'VIDEO', `First 300 bytes: ${buffer.slice(0, 300).toString('utf8')}`);
+                                    } else {
+                                        fs.writeFileSync('tweet_video.mp4', buffer);
+                                        log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()}`);
+                                        best.videoPath = 'tweet_video.mp4';
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            ghaError(`Child playlist / video download threw: ${e.message}`);
+                        }
+                    }
                 }
             }
 
