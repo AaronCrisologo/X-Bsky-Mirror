@@ -4,376 +4,364 @@ process.stderr.setEncoding('utf8');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
+const https = require('https');
+const http = require('http');
 
 puppeteer.use(StealthPlugin());
 
+// ─── Logging helpers ──────────────────────────────────────────────────────────
+
+function ts() {
+    return new Date().toISOString();
+}
+
+function log(icon, tag, msg) {
+    process.stderr.write(`[${ts()}] ${icon} [${tag}] ${msg}\n`);
+}
+
+function ghaGroup(name) {
+    process.stderr.write(`::group::${name}\n`);
+}
+
+function ghaEndGroup() {
+    process.stderr.write(`::endgroup::\n`);
+}
+
+function ghaError(msg) {
+    process.stderr.write(`::error::${msg}\n`);
+}
+
+function ghaWarning(msg) {
+    process.stderr.write(`::warning::${msg}\n`);
+}
+
+function timer() {
+    const start = Date.now();
+    return () => `${((Date.now() - start) / 1000).toFixed(2)}s`;
+}
+
+// ─── Cookie / env validation ──────────────────────────────────────────────────
+
+function validateEnv() {
+    ghaGroup('🔐 Environment Validation');
+    const authToken = process.env.X_AUTH_TOKEN;
+    const ct0 = process.env.X_CT0;
+    let valid = true;
+
+    if (!authToken) {
+        ghaError('X_AUTH_TOKEN secret is missing or empty');
+        valid = false;
+    } else {
+        log('✅', 'ENV', `X_AUTH_TOKEN present (length: ${authToken.length})`);
+    }
+
+    if (!ct0) {
+        ghaError('X_CT0 secret is missing or empty');
+        valid = false;
+    } else {
+        log('✅', 'ENV', `X_CT0 present (length: ${ct0.length})`);
+    }
+
+    ghaEndGroup();
+    return valid;
+}
+
+// ─── Cookies ──────────────────────────────────────────────────────────────────
+
 const rawCookies = [
-    { "domain": ".x.com", "name": "auth_token", "value": process.env.X_AUTH_TOKEN, "path": "/", "secure": true, "sameSite": "Lax" },
-    { "domain": ".x.com", "name": "ct0", "value": process.env.X_CT0, "path": "/", "secure": true, "sameSite": "Lax" }
+    { domain: '.x.com', name: 'auth_token', value: process.env.X_AUTH_TOKEN, path: '/', secure: true, sameSite: 'Lax' },
+    { domain: '.x.com', name: 'ct0',        value: process.env.X_CT0,        path: '/', secure: true, sameSite: 'Lax' }
 ];
 
-async function getLatestTweet(username) {
-    // Change this line in scraper.js:
-    const browser = await puppeteer.launch({
-        headless: "new",
-        // executablePath is often unnecessary if you let npm install it normally
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--single-process' // Helps with memory management in CI
-        ]
+// ─── File downloader (avoids page.goto so we keep the tweet page open) ────────
+
+function downloadFile(url, destPath, redirectDepth = 0) {
+    if (redirectDepth > 5) return Promise.reject(new Error('Too many redirects'));
+    return new Promise((resolve, reject) => {
+        const proto = url.startsWith('https') ? https : http;
+        const file = fs.createWriteStream(destPath);
+
+        proto.get(url, (response) => {
+            log('📡', 'HTTP', `${response.statusCode} ← ${url}`);
+
+            if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                file.close();
+                fs.unlinkSync(destPath);
+                log('↪️', 'REDIRECT', response.headers.location);
+                downloadFile(response.headers.location, destPath, redirectDepth + 1).then(resolve).catch(reject);
+                return;
+            }
+            if (response.statusCode !== 200) {
+                file.close();
+                fs.unlinkSync(destPath);
+                reject(new Error(`HTTP ${response.statusCode} for ${url}`));
+                return;
+            }
+            response.pipe(file);
+            file.on('finish', () => {
+                file.close(() => {
+                    const bytes = fs.existsSync(destPath) ? fs.statSync(destPath).size : 0;
+                    log('💾', 'SAVE', `${destPath} — ${(bytes / 1024).toFixed(1)} KB`);
+                    resolve();
+                });
+            });
+        }).on('error', (err) => {
+            fs.unlink(destPath, () => {});
+            reject(err);
+        });
+    });
+}
+
+// ─── Video URL picker ─────────────────────────────────────────────────────────
+
+function pickBestVideoUrl(urls) {
+    log('🎬', 'VIDEO', `Ranking ${urls.length} candidate URL(s):`);
+    urls.forEach((u, i) => log('  •', `URL[${i}]`, u));
+
+    // Prefer real video over animated GIFs hosted at /tweet_video/
+    const mainVideos = urls.filter(u => !u.includes('/tweet_video/'));
+    const candidates = mainVideos.length > 0 ? mainVideos : urls;
+
+    if (mainVideos.length === 0) {
+        ghaWarning('Only animated GIF (tweet_video) URLs found — using those as fallback');
+    }
+
+    const ranked = [...candidates].sort((a, b) => {
+        const matchA = a.match(/(\d{3,4})x(\d{3,4})/);
+        const matchB = b.match(/(\d{3,4})x(\d{3,4})/);
+        const areaA = matchA ? parseInt(matchA[1]) * parseInt(matchA[2]) : 0;
+        const areaB = matchB ? parseInt(matchB[1]) * parseInt(matchB[2]) : 0;
+        return areaB - areaA;
     });
 
+    log('🏆', 'VIDEO', `Best URL selected: ${ranked[0]}`);
+    return ranked[0];
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
+async function getLatestTweet(username) {
+    const totalTimer = timer();
+    log('🚀', 'START', `Scraper starting for @${username}`);
+
+    if (!validateEnv()) {
+        ghaError('Aborting — required secrets are missing');
+        process.exit(1);
+    }
+
+    // ── Browser ──────────────────────────────────────────────────────────────
+    ghaGroup('🖥️  Browser Launch');
+    const launchTimer = timer();
+    const browser = await puppeteer.launch({
+        headless: 'new',
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
+    });
+    log('✅', 'BROWSER', `Launched in ${launchTimer()}`);
+    ghaEndGroup();
+
     const page = await browser.newPage();
-    
-    // Set up request interception to capture video URLs
-    let capturedVideoUrl = null;
-    page.on('request', (req) => {
-        const url = req.url();
-        // Capture video requests (MP4, WebM, etc.)
-        if (url.includes('.mp4') || url.includes('.webm') || url.includes('/video/')) {
-            console.log(`[INTERCEPT] Video request detected: ${url.substring(0, 100)}...`);
-            if (!capturedVideoUrl) {
-                capturedVideoUrl = url;
-            }
+
+    // ── Network monitoring ────────────────────────────────────────────────────
+    const capturedVideoUrls = new Set();
+    let reqTotal = 0, reqFailed = 0;
+
+    page.on('response', (response) => {
+        reqTotal++;
+        const url = response.url();
+        if (url.includes('video.twimg.com') && url.includes('.mp4')) {
+            capturedVideoUrls.add(url);
+            log('🎥', 'INTERCEPT', `MP4 captured (${capturedVideoUrls.size} total): ${url}`);
         }
     });
-    
-    // Also listen for response to get final URLs after redirects
-    page.on('response', (res) => {
-        const url = res.url();
-        const contentType = res.headers()['content-type'] || '';
-        if (contentType.includes('video') || url.includes('.mp4') || url.includes('.webm')) {
-            console.log(`[INTERCEPT] Video response: ${url.substring(0, 100)}... (content-type: ${contentType})`);
-            if (!capturedVideoUrl) {
-                capturedVideoUrl = url;
-            }
+
+    page.on('requestfailed', (req) => {
+        reqFailed++;
+        log('🚫', 'BLOCKED', `${req.failure()?.errorText} — ${req.url().substring(0, 100)}`);
+    });
+
+    page.on('console', (msg) => {
+        if (msg.type() === 'error') {
+            log('🖥️', 'PAGE_ERR', msg.text());
         }
     });
 
     try {
+        // ── Page load ────────────────────────────────────────────────────────
+        ghaGroup(`🌐 Page Load — x.com/${username}`);
         await page.setCookie(...rawCookies);
+        log('🍪', 'COOKIES', 'auth_token + ct0 injected');
         await page.setViewport({ width: 1280, height: 1000 });
 
-        // Go to the "Replies" tab or just the profile.
-        // Adding /with_replies often forces X to bypass some cached layout issues.
+        const navTimer = timer();
         await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
+        log('✅', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
 
-        // Wait for the feed to load
+        const selectorTimer = timer();
         await page.waitForSelector('article', { timeout: 30000 });
+        log('✅', 'DOM', `First <article> visible in ${selectorTimer()}`);
+        ghaEndGroup();
 
-        // --- NEW SCROLL & COLLECT LOGIC ---
-        const tweetData = await page.evaluate(async () => {
+        // ── Scrape ───────────────────────────────────────────────────────────
+        ghaGroup('🔍 Scraping Tweets');
+        const scrapeTimer = timer();
+
+        const scrapeResult = await page.evaluate(async () => {
             const results = [];
-            console.log('[DEBUG] Starting tweet extraction...');
-            
-            for (let i = 0; i < 3; i++) {
-                console.log(`[DEBUG] Scroll iteration ${i+1}/3`);
+            for (let scroll = 0; scroll < 3; scroll++) {
                 const articles = Array.from(document.querySelectorAll('article'));
-                console.log(`[DEBUG] Found ${articles.length} articles on page`);
-                
-                articles.forEach((article, idx) => {
-                    const timeEl = article.querySelector('time');
-                    const textEl = article.querySelector('[data-testid="tweetText"]');
-                    const pinCheck = article.innerText.includes('Pinned');
-                    
-                    // Detect if there's a video or GIF
+                articles.forEach(article => {
+                    const timeEl   = article.querySelector('time');
+                    const textEl   = article.querySelector('[data-testid="tweetText"]');
+                    const isPinned = article.innerText.includes('Pinned');
                     const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
-                    
-                    if (timeEl) {
-                        let tweetText = "";
-                        
-                        // Extract text WITH emojis properly
-                        if (textEl) {
-                            // Process all child nodes to capture text and emoji images
-                            textEl.childNodes.forEach(node => {
-                                if (node.nodeType === Node.TEXT_NODE) {
-                                    tweetText += node.textContent;
-                                } else if (node.nodeName === 'IMG') {
-                                    // Emoji images have alt text with the actual emoji
-                                    tweetText += node.alt || '';
-                                } else if (node.childNodes) {
-                                    // Recursively process nested nodes
-                                    const processNode = (n) => {
-                                        n.childNodes.forEach(child => {
-                                            if (child.nodeType === Node.TEXT_NODE) {
-                                                tweetText += child.textContent;
-                                            } else if (child.nodeName === 'IMG') {
-                                                tweetText += child.alt || '';
-                                            } else if (child.childNodes) {
-                                                processNode(child);
-                                            }
-                                        });
-                                    };
-                                    processNode(node);
-                                }
+
+                    if (!timeEl) return;
+
+                    let tweetText = '';
+                    if (textEl) {
+                        const processNode = (n) => {
+                            n.childNodes.forEach(child => {
+                                if (child.nodeType === Node.TEXT_NODE) tweetText += child.textContent;
+                                else if (child.nodeName === 'IMG')       tweetText += child.alt || '';
+                                else if (child.childNodes)               processNode(child);
                             });
-                        }
-                        
-                        // Extract images (regular photos)
-                        let imageUrls = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src);
-                        
-                        // Extract video URL if it's a video post
-                        let videoUrl = null;
-                        if (hasVideo) {
-                            // Try multiple selectors for video player
-                            const videoPlayer = article.querySelector('[data-testid="videoPlayer"], [data-testid="video"], .PlayableMedia-container, .tweet-video, [data-testid="tweetVideo"]');
-                            
-                            if (videoPlayer) {
-                                // Method 1: Find video element with src
-                                const videoEl = videoPlayer.querySelector('video');
-                                if (videoEl) {
-                                    // Check direct src
-                                    if (videoEl.src && videoEl.src.includes('http')) {
-                                        videoUrl = videoEl.src;
-                                    }
-                                    // Check source elements inside video
-                                    if (!videoUrl) {
-                                        const sources = videoEl.querySelectorAll('source');
-                                        for (const source of sources) {
-                                            let src = source.src || source.getAttribute('data-src') || source.getAttribute('data-url');
-                                            if (src && src.includes('http')) {
-                                                videoUrl = src;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    // Check srcset
-                                    if (!videoUrl && videoEl.srcset) {
-                                        const srcset = videoEl.srcset;
-                                        // srcset contains multiple URLs with descriptors, pick the highest quality
-                                        const entries = srcset.split(',').map(s => s.trim());
-                                        // Find MP4 entries, prefer highest resolution
-                                        const mp4Entries = entries.filter(e => e.includes('.mp4') || e.includes('.m3u8'));
-                                        if (mp4Entries.length > 0) {
-                                            // Take the last one (usually highest quality) or the one with highest width
-                                            const best = mp4Entries[mp4Entries.length - 1];
-                                            videoUrl = best.split(' ')[0];
-                                        } else if (entries.length > 0) {
-                                            videoUrl = entries[0].split(' ')[0];
-                                        }
-                                    }
-                                }
-                                
-                                // Method 2: Look for data attributes with video URL
-                                if (!videoUrl) {
-                                    const attrs = ['data-video-url', 'data-url', 'data-src', 'data-video-src', 'data-mp4-url'];
-                                    for (const attr of attrs) {
-                                        const val = videoPlayer.getAttribute(attr);
-                                        if (val && val.includes('http')) {
-                                            videoUrl = val;
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                // Method 3: Look for links/buttons that might contain video URL
-                                if (!videoUrl) {
-                                    const links = videoPlayer.querySelectorAll('a');
-                                    for (const link of links) {
-                                        const href = link.href;
-                                        if (href && (href.includes('.mp4') || href.includes('/video/'))) {
-                                            videoUrl = href;
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                // Method 4: Search for any script or JSON data in the article that might contain video URL
-                                if (!videoUrl) {
-                                    const scripts = article.querySelectorAll('script');
-                                    for (const script of scripts) {
-                                        const content = script.textContent;
-                                        if (content) {
-                                            // Look for common video URL patterns
-                                            const mp4Match = content.match(/"(https?:\/\/[^"]+\.mp4[^"]*)"/);
-                                            if (mp4Match) {
-                                                videoUrl = mp4Match[1];
-                                                break;
-                                            }
-                                            // Look for video URL in JSON-like structures
-                                            const urlMatch = content.match(/"(https?:\/\/[^"]+(?:\.mp4|\.m3u8)[^"]*)"/);
-                                            if (urlMatch) {
-                                                videoUrl = urlMatch[1];
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                // If still no video URL, extract thumbnail from background
-                                if (!videoUrl) {
-                                    const bgStyle = videoPlayer.getAttribute('style') || '';
-                                    const bgMatch = bgStyle.match(/background-image:\s*url\(['"]?(.+?)['"]?\)/);
-                                    if (bgMatch && bgMatch[1]) {
-                                        imageUrls.push(bgMatch[1]);
-                                    }
-                                }
-                                
-                                // Log for debugging
-                                if (videoUrl) {
-                                    console.log(`[DEBUG] Video URL found: ${videoUrl.substring(0, 80)}...`);
-                                } else {
-                                    console.log(`[DEBUG] Could not extract video URL, will fall back to images/thumbnail`);
-                                }
-                            } else {
-                                console.log(`[DEBUG] No video player element found`);
-                            }
-                        }
-                        
-                        const result = {
-                            text: tweetText,
-                            time: timeEl.getAttribute('datetime'),
-                            isPinned: pinCheck,
-                            hasVideo: hasVideo,
-                            videoUrl: videoUrl,
-                            images: imageUrls
                         };
-                        console.log(`[DEBUG] Tweet extracted: hasVideo=${hasVideo}, videoUrl=${videoUrl ? 'found' : 'null'}, images=${imageUrls.length}`);
-                        results.push(result);
+                        processNode(textEl);
                     }
+
+                    results.push({
+                        text:     tweetText,
+                        time:     timeEl.getAttribute('datetime'),
+                        isPinned,
+                        hasVideo,
+                        images:   Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
+                    });
                 });
                 window.scrollBy(0, 800);
                 await new Promise(r => setTimeout(r, 1500));
             }
-            
-            // Remove duplicates first
+
             const unique = results.filter((v, i, a) =>
                 a.findIndex(t => t.time === v.time) === i
             );
-            // Sort by time descending (newest first)
             unique.sort((a, b) => new Date(b.time) - new Date(a.time));
-            // Return the newest post (pinned or not)
-            return unique[0];
+            return unique;
         });
 
-        // If we captured a video URL via interception, use it instead of blob URL
-        if (tweetData && tweetData.hasVideo && capturedVideoUrl && tweetData.videoUrl?.startsWith('blob:')) {
-            console.log(`[INTERCEPT] Replacing blob URL with captured HTTP video URL: ${capturedVideoUrl.substring(0, 100)}...`);
-            tweetData.videoUrl = capturedVideoUrl;
+        log('📋', 'SCRAPE', `${scrapeResult.length} unique article(s) found in ${scrapeTimer()}`);
+        scrapeResult.forEach((t, i) => {
+            log(`  [${i}]`, 'ARTICLE',
+                `time=${t.time} | pinned=${t.isPinned} | video=${t.hasVideo} | ` +
+                `images=${t.images.length} | text="${t.text.substring(0, 80).replace(/\n/g, ' ')}..."`
+            );
+        });
+
+        const best = scrapeResult[0];
+        if (!best) {
+            ghaError('No tweets found after scraping — page may not have loaded correctly');
+            ghaEndGroup();
+            console.log(JSON.stringify({ error: 'No tweet found' }));
+            return;
         }
 
-        // --- HIGH-RES IMAGE DOWNLOAD ---
-        if (tweetData && tweetData.images.length > 0) {
-            for (let i = 0; i < tweetData.images.length; i++) {
-                const originalUrl = tweetData.images[i];
+        log('🏆', 'SELECTED', `time=${best.time} | video=${best.hasVideo} | images=${best.images.length}`);
+        ghaEndGroup();
+
+        // ── Video ────────────────────────────────────────────────────────────
+        if (best.hasVideo) {
+            ghaGroup('🎬 Video Download');
+            log('ℹ️', 'VIDEO', `${capturedVideoUrls.size} MP4 URL(s) intercepted so far`);
+
+            const tryDownload = async (label) => {
+                if (capturedVideoUrls.size === 0) {
+                    ghaWarning(`${label}: no MP4 URLs available yet`);
+                    return false;
+                }
+                const bestUrl = pickBestVideoUrl(Array.from(capturedVideoUrls));
+                const dlTimer = timer();
+                try {
+                    await downloadFile(bestUrl, 'tweet_video.mp4');
+                    log('✅', 'VIDEO', `${label} succeeded in ${dlTimer()}`);
+                    best.videoPath = 'tweet_video.mp4';
+                    return true;
+                } catch (e) {
+                    ghaError(`${label} failed: ${e.message}`);
+                    return false;
+                }
+            };
+
+            let ok = await tryDownload('Passive intercept');
+
+            if (!ok) {
+                log('🔄', 'VIDEO', 'Clicking player to trigger stream URL...');
+                try {
+                    await page.click('[data-testid="videoPlayer"]');
+                    log('✅', 'VIDEO', 'Click sent — waiting 4s...');
+                    await new Promise(r => setTimeout(r, 4000));
+                    log('ℹ️', 'VIDEO', `MP4 URLs after click: ${capturedVideoUrls.size}`);
+                    ok = await tryDownload('Post-click intercept');
+                } catch (e) {
+                    ghaError(`Player click threw: ${e.message}`);
+                }
+            }
+
+            if (!ok) {
+                ghaWarning('Video download failed — bot.py will fall back to thumbnail/image');
+            }
+            ghaEndGroup();
+        }
+
+        // ── Images ───────────────────────────────────────────────────────────
+        if (best.images.length > 0) {
+            ghaGroup(`🖼️  Image Download (${best.images.length} image(s))`);
+            for (let i = 0; i < best.images.length; i++) {
+                const originalUrl = best.images[i];
                 let highResUrl;
-                
-                // Twitter images usually have format=jpg&name=small/medium/large
-                // We want to keep format but change name to 'orig'
                 if (originalUrl.includes('?')) {
                     const [base, params] = originalUrl.split('?');
                     const urlParams = new URLSearchParams(params);
                     urlParams.set('name', 'orig');
                     highResUrl = `${base}?${urlParams.toString()}`;
                 } else {
-                    // Fallback if no query params (shouldn't happen, but just in case)
                     highResUrl = `${originalUrl}?format=jpg&name=orig`;
                 }
-                
+
+                log('⬇️', `IMG[${i}]`, highResUrl);
+                const imgTimer = timer();
                 try {
-                    const response = await page.goto(highResUrl, { 
-                        waitUntil: 'networkidle0',
-                        timeout: 15000 
-                    });
-                    
+                    const response = await page.goto(highResUrl, { waitUntil: 'networkidle0', timeout: 15000 });
                     if (response && response.ok()) {
                         const buffer = await response.buffer();
                         fs.writeFileSync(`tweet_img_${i}.jpg`, buffer);
+                        log('✅', `IMG[${i}]`, `Saved tweet_img_${i}.jpg — ${(buffer.length / 1024).toFixed(1)} KB in ${imgTimer()}`);
                     } else {
-                        process.stderr.write(`Failed image ${i}: Invalid response (status: ${response?.status()})\n`);
-                        process.stderr.write(`URL attempted: ${highResUrl}\n`);
+                        ghaError(`IMG[${i}]: HTTP ${response?.status()} — ${highResUrl}`);
                     }
                 } catch (e) {
-                    process.stderr.write(`Failed image ${i}: ${e.message}\n`);
-                    process.stderr.write(`URL attempted: ${highResUrl}\n`);
+                    ghaError(`IMG[${i}]: ${e.message} — ${highResUrl}`);
                 }
             }
+            ghaEndGroup();
         }
 
-        // --- VIDEO DOWNLOAD ---
-        if (tweetData && tweetData.videoUrl) {
-            try {
-                const videoUrl = tweetData.videoUrl;
-                process.stderr.write(`🎥 [SCRAPER] Video URL detected: ${videoUrl.substring(0, 100)}...\n`);
-                process.stderr.write(`🎥 [SCRAPER] URL type: ${videoUrl.startsWith('blob:') ? 'BLOB (in-browser)' : 'HTTP'}\n`);
-                
-                // Check if it's a blob URL (needs special handling)
-                if (videoUrl.startsWith('blob:')) {
-                    process.stderr.write(`🎥 [SCRAPER] Blob URL detected, fetching video data from browser context...\n`);
-                    
-                    // Fetch the blob data from within the page context
-                    const videoBuffer = await page.evaluate(async (url) => {
-                        console.log('[PAGE] Starting blob fetch...');
-                        return new Promise((resolve, reject) => {
-                            fetch(url)
-                                .then(response => {
-                                    console.log('[PAGE] Fetch response received, getting blob...');
-                                    return response.blob();
-                                })
-                                .then(blob => {
-                                    console.log(`[PAGE] Blob obtained, size: ${blob.size}, type: ${blob.type}`);
-                                    return new Promise((res, rej) => {
-                                        const reader = new FileReader();
-                                        reader.onloadend = () => {
-                                            console.log('[PAGE] FileReader completed, converting to binary...');
-                                            // Convert base64 to ArrayBuffer
-                                            const base64 = reader.result.split(',')[1];
-                                            const binary = atob(base64);
-                                            const bytes = new Uint8Array(binary.length);
-                                            for (let i = 0; i < binary.length; i++) {
-                                                bytes[i] = binary.charCodeAt(i);
-                                            }
-                                            console.log(`[PAGE] Converted to ArrayBuffer, size: ${bytes.byteLength}`);
-                                            res(bytes.buffer);
-                                        };
-                                        reader.onerror = (e) => {
-                                            console.error('[PAGE] FileReader error:', e);
-                                            rej(e);
-                                        };
-                                        reader.readAsDataURL(blob);
-                                    });
-                                })
-                                .catch(reject);
-                        });
-                    }, videoUrl);
-                    
-                    // Convert ArrayBuffer to Buffer and save
-                    const buffer = Buffer.from(new Uint8Array(videoBuffer));
-                    fs.writeFileSync('tweet_video.mp4', buffer);
-                    process.stderr.write(`✅ [SCRAPER] Video downloaded successfully from blob (${buffer.length} bytes, ${(buffer.length/1024/1024).toFixed(2)} MB)\n`);
-                } else {
-                    // Regular HTTP URL - download directly
-                    process.stderr.write(`🌐 [SCRAPER] Downloading video from HTTP URL...\n`);
-                    const response = await page.goto(videoUrl, { 
-                        waitUntil: 'networkidle0',
-                        timeout: 30000
-                    });
-                    
-                    if (response && response.ok()) {
-                        const buffer = await response.buffer();
-                        fs.writeFileSync('tweet_video.mp4', buffer);
-                        process.stderr.write(`✅ [SCRAPER] Video downloaded successfully from HTTP (${buffer.length} bytes, ${(buffer.length/1024/1024).toFixed(2)} MB)\n`);
-                    } else {
-                        process.stderr.write(`❌ [SCRAPER] Failed video download: Invalid response (status: ${response?.status()})\n`);
-                    }
-                }
-            } catch (e) {
-                process.stderr.write(`❌ [SCRAPER] Failed video download: ${e.message}\n`);
-                process.stderr.write(`❌ [SCRAPER] Stack: ${e.stack?.substring(0, 200) || 'no stack'}\n`);
-            }
-        } else if (tweetData && tweetData.hasVideo) {
-            process.stderr.write(`⚠️  [SCRAPER] Tweet hasVideo=true but no videoUrl extracted. Images count: ${tweetData.images.length}\n`);
-        }
+        // ── Summary ──────────────────────────────────────────────────────────
+        ghaGroup('📊 Run Summary');
+        log('⏱️', 'TIMING', `Total elapsed: ${totalTimer()}`);
+        log('🌐', 'NETWORK', `${reqTotal} responses, ${reqFailed} failed`);
+        log('🎥', 'VIDEO', `${capturedVideoUrls.size} MP4 URL(s) intercepted | videoPath: ${best.videoPath || '(none)'}`);
+        log('🖼️', 'IMAGES', `${best.images.length} image(s) in tweet`);
+        log('📝', 'TEXT', `${best.text.length} chars | "${best.text.substring(0, 100).replace(/\n/g, ' ')}..."`);
+        ghaEndGroup();
 
-        console.log(JSON.stringify(tweetData));
+        console.log(JSON.stringify(best));
 
     } catch (error) {
-        console.error(`{"error": "${error.message}"}`);
+        ghaError(`Unhandled exception: ${error.message}`);
+        log('💥', 'FATAL', error.stack || error.message);
+        console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
     } finally {
         await browser.close();
+        log('🛑', 'DONE', `Browser closed — total: ${totalTimer()}`);
     }
 }
 
