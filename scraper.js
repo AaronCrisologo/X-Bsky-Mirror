@@ -31,6 +31,17 @@ async function getLatestTweet(username) {
         await page.setCookie(...rawCookies);
         await page.setViewport({ width: 1280, height: 1000 });
 
+        // Enable request interception to capture video URLs
+        const videoUrls = new Set();
+        page.on('request', request => {
+            const url = request.url();
+            // Capture video requests (MP4, WebM, etc.)
+            if (url.includes('.mp4') || url.includes('.webm') || url.includes('/video/')) {
+                console.log(`[NETWORK] Video request detected: ${url.substring(0, 100)}...`);
+                videoUrls.add(url);
+            }
+        });
+
         // Go to the "Replies" tab or just the profile.
         // Adding /with_replies often forces X to bypass some cached layout issues.
         await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
