@@ -320,39 +320,109 @@ async function getLatestTweet(username) {
                             if (!videoUrl) {
                                 ghaWarning('No #EXT-X-MAP .mp4 URI found in child playlist');
                             } else {
-                                // Let ffmpeg handle HLS download + mux natively.
-                                // The master m3u8 URL is tokenized — no cookies needed.
-                                // ffmpeg's HLS demuxer downloads all segments, handles timing,
-                                // and writes correct duration metadata automatically.
                                 const { execFile } = require('child_process');
                                 const ffmpegPath = require('ffmpeg-static');
-                                const masterM3u8Url = m3u8.url.split('?')[0] + '?tag=12';
                                 log('🎞️', 'FFMPEG', `Using binary: ${ffmpegPath}`);
-                                log('⬇️', 'FFMPEG', `Input: ${masterM3u8Url}`);
-                                const dlTimer = timer();
-                                await new Promise((resolve, reject) => {
-                                    execFile(ffmpegPath, [
-                                        '-y',
-                                        '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-                                        '-i', masterM3u8Url,
-                                        '-c:v', 'copy',
-                                        '-c:a', 'aac',
-                                        '-b:a', '128k',
-                                        '-movflags', '+faststart',
-                                        'tweet_video.mp4'
-                                    ], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-                                        if (err) {
-                                            ghaError(`ffmpeg failed: ${err.message}`);
-                                            log('🔬', 'FFMPEG', stderr.slice(-800));
-                                            reject(err);
-                                        } else {
-                                            const finalSize = (fs.statSync('tweet_video.mp4').size / 1024).toFixed(1);
-                                            log('✅', 'FFMPEG', `Done in ${dlTimer()} — ${finalSize} KB`);
-                                            best.videoPath = 'tweet_video.mp4';
-                                            resolve();
-                                        }
+
+                                const fetchUrl = (url) => new Promise((resolve, reject) => {
+                                    const https = require('https');
+                                    const chunks = [];
+                                    const req = https.get(url, res => {
+                                        if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode}: ${url}`)); return; }
+                                        res.on('data', c => chunks.push(c));
+                                        res.on('end', () => resolve(Buffer.concat(chunks)));
                                     });
+                                    req.on('error', reject);
+                                    req.setTimeout(30000, () => { req.destroy(); reject(new Error(`Timeout: ${url}`)); });
                                 });
+
+                                const downloadTrack = async (playlistBody, label) => {
+                                    let initUrl = null;
+                                    const segUrls = [];
+                                    for (const line of playlistBody.split('\n').map(l => l.trim())) {
+                                        const mapMatch = line.match(/^#EXT-X-MAP:URI="([^"]+)"/);
+                                        if (mapMatch) {
+                                            const u = mapMatch[1];
+                                            initUrl = u.startsWith('https://') ? u : `https://video.twimg.com${u}`;
+                                        } else if (!line.startsWith('#') && line.includes('.m4s')) {
+                                            segUrls.push(line.startsWith('https://') ? line : `https://video.twimg.com${line}`);
+                                        }
+                                    }
+                                    const allUrls = initUrl ? [initUrl, ...segUrls] : segUrls;
+                                    log('ℹ️', label, `${allUrls.length} segment(s) to download`);
+                                    const buffers = [];
+                                    for (let i = 0; i < allUrls.length; i++) {
+                                        buffers.push(await fetchUrl(allUrls[i]));
+                                        if (i % 5 === 0) log('ℹ️', label, `${i + 1}/${allUrls.length} done`);
+                                    }
+                                    log('✅', label, 'All segments downloaded');
+                                    return Buffer.concat(buffers);
+                                };
+
+                                const dlTimer = timer();
+                                try {
+                                    log('⬇️', 'VIDEO', 'Downloading video track...');
+                                    const videoBuffer = await downloadTrack(childBody, 'VID');
+                                    fs.writeFileSync('tweet_video_raw.mp4', videoBuffer);
+                                    log('✅', 'VIDEO', `Raw video: ${(videoBuffer.length / 1024).toFixed(1)} KB`);
+
+                                    const audioGroups = [];
+                                    for (const match of m3u8.body.matchAll(/GROUP-ID="audio-(\d+)",AUTOSELECT=YES,URI="([^"]+)"/g)) {
+                                        audioGroups.push({ bitrate: parseInt(match[1]), uri: match[2] });
+                                    }
+                                    audioGroups.sort((a, b) => b.bitrate - a.bitrate);
+                                    log('ℹ️', 'AUDIO', `Audio groups: ${audioGroups.map(g => g.bitrate).join(', ')} bps`);
+
+                                    if (audioGroups.length > 0) {
+                                        const audioUri = audioGroups[0].uri;
+                                        const audioPlaylistUrl = audioUri.startsWith('https://') ? audioUri : `https://video.twimg.com${audioUri}`;
+                                        log('⬇️', 'AUDIO', `Playlist (${audioGroups[0].bitrate} bps): ${audioPlaylistUrl}`);
+                                        const cachedAudio = manifests.find(m => m.url === audioPlaylistUrl);
+                                        const audioBody = cachedAudio ? cachedAudio.body : (await fetchUrl(audioPlaylistUrl)).toString();
+                                        log('ℹ️', 'AUDIO', cachedAudio ? 'Using cached playlist' : 'Fetched playlist');
+                                        const audioBuffer = await downloadTrack(audioBody, 'AUD');
+                                        fs.writeFileSync('tweet_audio_raw.mp4', audioBuffer);
+                                        log('✅', 'AUDIO', `Raw audio: ${(audioBuffer.length / 1024).toFixed(1)} KB`);
+
+                                        // -fflags +genpts regenerates timestamps so ffmpeg computes real duration
+                                        log('🎞️', 'FFMPEG', 'Muxing...');
+                                        await new Promise((resolve, reject) => {
+                                            execFile(ffmpegPath, [
+                                                '-y',
+                                                '-fflags', '+genpts',
+                                                '-i', 'tweet_video_raw.mp4',
+                                                '-i', 'tweet_audio_raw.mp4',
+                                                '-map', '0:v:0',
+                                                '-map', '1:a:0',
+                                                '-c:v', 'copy',
+                                                '-c:a', 'aac',
+                                                '-b:a', '128k',
+                                                '-movflags', '+faststart',
+                                                'tweet_video.mp4'
+                                            ], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+                                                // Always log ffmpeg tail so we can see duration line
+                                                log('🔬', 'FFMPEG', stderr.slice(-600));
+                                                if (err) { ghaError(`ffmpeg failed: ${err.message}`); reject(err); }
+                                                else { log('✅', 'FFMPEG', 'Mux complete'); resolve(); }
+                                            });
+                                        });
+                                        fs.unlinkSync('tweet_video_raw.mp4');
+                                        fs.unlinkSync('tweet_audio_raw.mp4');
+                                    } else {
+                                        ghaWarning('No audio groups — using video-only');
+                                        fs.renameSync('tweet_video_raw.mp4', 'tweet_video.mp4');
+                                    }
+
+                                    const finalSize = (fs.statSync('tweet_video.mp4').size / 1024).toFixed(1);
+                                    log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${finalSize} KB in ${dlTimer()}`);
+                                    best.videoPath = 'tweet_video.mp4';
+
+                                } catch (e) {
+                                    ghaError(`Video/audio download or mux failed: ${e.message}`);
+                                    for (const f of ['tweet_video_raw.mp4', 'tweet_audio_raw.mp4']) {
+                                        try { fs.unlinkSync(f); } catch {}
+                                    }
+                                }
                             }
                         } catch (e) {
                             ghaError(`Child playlist / video download threw: ${e.message}`);
