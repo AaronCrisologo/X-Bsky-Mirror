@@ -280,7 +280,11 @@ def main():
         print("❌ [MAIN] No tweet data received. Skipping.")
         return
 
-    print(f"📊 [MAIN] Tweet data received: hasVideo={tweet_data.get('hasVideo', False)}, videoUrl={tweet_data.get('videoUrl') is not None}, image_count={len(tweet_data.get('images', []))}")
+    print(f"📊 [MAIN] Tweet data received:")
+    print(f"   - hasVideo: {tweet_data.get('hasVideo', False)}")
+    print(f"   - videoUrl: {'✅ ' + tweet_data.get('videoUrl', '')[:80] + '...' if tweet_data.get('videoUrl') else '❌ None'}")
+    print(f"   - image_count: {len(tweet_data.get('images', []))}")
+    print(f"   - text length: {len(tweet_data.get('text', ''))}")
     
     tweet_time_str = tweet_data.get('time', '')
     is_recent = False

@@ -41,16 +41,21 @@ async function getLatestTweet(username) {
         // --- NEW SCROLL & COLLECT LOGIC ---
         const tweetData = await page.evaluate(async () => {
             const results = [];
+            console.log('[DEBUG] Starting tweet extraction...');
+            
             for (let i = 0; i < 3; i++) {
+                console.log(`[DEBUG] Scroll iteration ${i+1}/3`);
                 const articles = Array.from(document.querySelectorAll('article'));
-                articles.forEach(article => {
+                console.log(`[DEBUG] Found ${articles.length} articles on page`);
+                
+                articles.forEach((article, idx) => {
                     const timeEl = article.querySelector('time');
                     const textEl = article.querySelector('[data-testid="tweetText"]');
                     const pinCheck = article.innerText.includes('Pinned');
                     
                     // Detect if there's a video or GIF
                     const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
-        
+                    
                     if (timeEl) {
                         let tweetText = "";
                         
@@ -259,22 +264,76 @@ async function getLatestTweet(username) {
         // --- VIDEO DOWNLOAD ---
         if (tweetData && tweetData.videoUrl) {
             try {
-                process.stderr.write(`Downloading video from: ${tweetData.videoUrl}\n`);
-                const response = await page.goto(tweetData.videoUrl, { 
-                    waitUntil: 'networkidle0',
-                    timeout: 30000  // Videos can be large, give more time
-                });
+                const videoUrl = tweetData.videoUrl;
+                process.stderr.write(`🎥 [SCRAPER] Video URL detected: ${videoUrl.substring(0, 100)}...\n`);
+                process.stderr.write(`🎥 [SCRAPER] URL type: ${videoUrl.startsWith('blob:') ? 'BLOB (in-browser)' : 'HTTP'}\n`);
                 
-                if (response && response.ok()) {
-                    const buffer = await response.buffer();
+                // Check if it's a blob URL (needs special handling)
+                if (videoUrl.startsWith('blob:')) {
+                    process.stderr.write(`🎥 [SCRAPER] Blob URL detected, fetching video data from browser context...\n`);
+                    
+                    // Fetch the blob data from within the page context
+                    const videoBuffer = await page.evaluate(async (url) => {
+                        console.log('[PAGE] Starting blob fetch...');
+                        return new Promise((resolve, reject) => {
+                            fetch(url)
+                                .then(response => {
+                                    console.log('[PAGE] Fetch response received, getting blob...');
+                                    return response.blob();
+                                })
+                                .then(blob => {
+                                    console.log(`[PAGE] Blob obtained, size: ${blob.size}, type: ${blob.type}`);
+                                    return new Promise((res, rej) => {
+                                        const reader = new FileReader();
+                                        reader.onloadend = () => {
+                                            console.log('[PAGE] FileReader completed, converting to binary...');
+                                            // Convert base64 to ArrayBuffer
+                                            const base64 = reader.result.split(',')[1];
+                                            const binary = atob(base64);
+                                            const bytes = new Uint8Array(binary.length);
+                                            for (let i = 0; i < binary.length; i++) {
+                                                bytes[i] = binary.charCodeAt(i);
+                                            }
+                                            console.log(`[PAGE] Converted to ArrayBuffer, size: ${bytes.byteLength}`);
+                                            res(bytes.buffer);
+                                        };
+                                        reader.onerror = (e) => {
+                                            console.error('[PAGE] FileReader error:', e);
+                                            rej(e);
+                                        };
+                                        reader.readAsDataURL(blob);
+                                    });
+                                })
+                                .catch(reject);
+                        });
+                    }, videoUrl);
+                    
+                    // Convert ArrayBuffer to Buffer and save
+                    const buffer = Buffer.from(new Uint8Array(videoBuffer));
                     fs.writeFileSync('tweet_video.mp4', buffer);
-                    process.stderr.write(`Video downloaded successfully (${buffer.length} bytes)\n`);
+                    process.stderr.write(`✅ [SCRAPER] Video downloaded successfully from blob (${buffer.length} bytes, ${(buffer.length/1024/1024).toFixed(2)} MB)\n`);
                 } else {
-                    process.stderr.write(`Failed video download: Invalid response (status: ${response?.status()})\n`);
+                    // Regular HTTP URL - download directly
+                    process.stderr.write(`🌐 [SCRAPER] Downloading video from HTTP URL...\n`);
+                    const response = await page.goto(videoUrl, { 
+                        waitUntil: 'networkidle0',
+                        timeout: 30000
+                    });
+                    
+                    if (response && response.ok()) {
+                        const buffer = await response.buffer();
+                        fs.writeFileSync('tweet_video.mp4', buffer);
+                        process.stderr.write(`✅ [SCRAPER] Video downloaded successfully from HTTP (${buffer.length} bytes, ${(buffer.length/1024/1024).toFixed(2)} MB)\n`);
+                    } else {
+                        process.stderr.write(`❌ [SCRAPER] Failed video download: Invalid response (status: ${response?.status()})\n`);
+                    }
                 }
             } catch (e) {
-                process.stderr.write(`Failed video download: ${e.message}\n`);
+                process.stderr.write(`❌ [SCRAPER] Failed video download: ${e.message}\n`);
+                process.stderr.write(`❌ [SCRAPER] Stack: ${e.stack?.substring(0, 200) || 'no stack'}\n`);
             }
+        } else if (tweetData && tweetData.hasVideo) {
+            process.stderr.write(`⚠️  [SCRAPER] Tweet hasVideo=true but no videoUrl extracted. Images count: ${tweetData.images.length}\n`);
         }
 
         console.log(JSON.stringify(tweetData));
