@@ -320,29 +320,17 @@ async function getLatestTweet(username) {
                             if (!videoUrl) {
                                 ghaWarning('No #EXT-X-MAP .mp4 URI found in child playlist');
                             } else {
-                                // videoUrl is the CMAF init segment (ftyp+moov boxes, ~1KB).
-                                // The actual video frames are in the .m4s chunks listed in the playlist.
-                                // We must concatenate: init.mp4 + chunk1.m4s + chunk2.m4s + ...
-                                const baseUrl = best_stream.url.substring(0, best_stream.url.lastIndexOf('/') + 1);
+                                // Download video segments AND audio segments separately, then mux with ffmpeg.
+                                // Twitter uses CMAF: init segment (~1KB) + .m4s chunks per track.
 
-                                // Collect all segment URLs: init segment first, then .m4s chunks in order
-                                const segmentUrls = [videoUrl];
-                                for (const line of (childBody || '').split('\n').map(l => l.trim())) {
-                                    if (!line.startsWith('#') && line.includes('.m4s')) {
-                                        segmentUrls.push(line.startsWith('https://') ? line : `https://video.twimg.com${line}`);
-                                    }
-                                }
-                                log('ℹ️', 'VIDEO', `Downloading ${segmentUrls.length} segment(s): 1 init + ${segmentUrls.length - 1} chunks`);
+                                const { execFile } = require('child_process');
 
-                                const fetchSegment = (url) => new Promise((resolve, reject) => {
+                                // Helper: fetch a URL and return a Buffer
+                                const fetchUrl = (url) => new Promise((resolve, reject) => {
                                     const https = require('https');
                                     const chunks = [];
                                     const req = https.get(url, res => {
-                                        if (res.statusCode !== 200) {
-                                            res.resume();
-                                            reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-                                            return;
-                                        }
+                                        if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode}: ${url}`)); return; }
                                         res.on('data', c => chunks.push(c));
                                         res.on('end', () => resolve(Buffer.concat(chunks)));
                                     });
@@ -350,22 +338,115 @@ async function getLatestTweet(username) {
                                     req.setTimeout(30000, () => { req.destroy(); reject(new Error(`Timeout: ${url}`)); });
                                 });
 
+                                // Helper: download all segments from a playlist body and concatenate
+                                const downloadTrack = async (playlistBody, playlistUrl, label) => {
+                                    const segUrls = [];
+                                    let initUrl = null;
+                                    for (const line of playlistBody.split('\n').map(l => l.trim())) {
+                                        const mapMatch = line.match(/^#EXT-X-MAP:URI="([^"]+)"/);
+                                        if (mapMatch) {
+                                            const u = mapMatch[1];
+                                            initUrl = u.startsWith('https://') ? u : `https://video.twimg.com${u}`;
+                                        } else if (!line.startsWith('#') && (line.includes('.m4s') || line.includes('.mp4'))) {
+                                            segUrls.push(line.startsWith('https://') ? line : `https://video.twimg.com${line}`);
+                                        }
+                                    }
+                                    const allUrls = initUrl ? [initUrl, ...segUrls] : segUrls;
+                                    log('ℹ️', label, `${allUrls.length} segment(s) to download`);
+                                    const buffers = [];
+                                    for (let i = 0; i < allUrls.length; i++) {
+                                        const buf = await fetchUrl(allUrls[i]);
+                                        buffers.push(buf);
+                                        if (i % 5 === 0) log('ℹ️', label, `${i + 1}/${allUrls.length} done`);
+                                    }
+                                    log('✅', label, `All segments downloaded`);
+                                    return Buffer.concat(buffers);
+                                };
+
                                 const dlTimer = timer();
                                 try {
-                                    const buffers = [];
-                                    for (let i = 0; i < segmentUrls.length; i++) {
-                                        const buf = await fetchSegment(segmentUrls[i]);
-                                        buffers.push(buf);
-                                        if (i === 0) log('ℹ️', 'VIDEO', `Init segment: ${(buf.length / 1024).toFixed(1)} KB`);
-                                        else if (i % 5 === 0) log('ℹ️', 'VIDEO', `Segments downloaded: ${i}/${segmentUrls.length - 1}`);
+                                    // ── Video track ───────────────────────────────────────────────
+                                    log('⬇️', 'VIDEO', 'Downloading video track...');
+                                    const videoBuffer = await downloadTrack(childBody, best_stream.url, 'VID');
+
+                                    // ── Audio track ───────────────────────────────────────────────
+                                    // Find the audio playlist URL from the master — pick highest bitrate
+                                    const audioMatch = m3u8.body.match(/GROUP-ID="audio-(\d+)"[^\n]*\nURIs?="([^"]+)"/s) ||
+                                                       m3u8.body.match(/URI="([^"]+mp4a[^"]+\.m3u8)"/);
+                                    
+                                    // Parse all audio groups and pick highest bitrate
+                                    const audioGroups = [];
+                                    for (const match of m3u8.body.matchAll(/GROUP-ID="audio-(\d+)",AUTOSELECT=YES,URI="([^"]+)"/g)) {
+                                        audioGroups.push({ bitrate: parseInt(match[1]), uri: match[2] });
                                     }
-                                    const combined = Buffer.concat(buffers);
-                                    const sizeKb = (combined.length / 1024).toFixed(1);
-                                    fs.writeFileSync('tweet_video.mp4', combined);
-                                    log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()} (${segmentUrls.length} segments)`);
+                                    audioGroups.sort((a, b) => b.bitrate - a.bitrate);
+                                    log('ℹ️', 'AUDIO', `Audio groups: ${audioGroups.map(g => g.bitrate).join(', ')} bps`);
+
+                                    let audioBuffer = null;
+                                    if (audioGroups.length > 0) {
+                                        const audioUri = audioGroups[0].uri;
+                                        const audioPlaylistUrl = audioUri.startsWith('https://') ? audioUri : `https://video.twimg.com${audioUri}`;
+                                        log('⬇️', 'AUDIO', `Fetching audio playlist (${audioGroups[0].bitrate} bps): ${audioPlaylistUrl}`);
+
+                                        // Check cache first
+                                        const cachedAudio = manifests.find(m => m.url === audioPlaylistUrl);
+                                        const audioPlaylistBody = cachedAudio ? cachedAudio.body : await fetchUrl(audioPlaylistUrl).then(b => b.toString());
+                                        log('ℹ️', 'AUDIO', cachedAudio ? 'Using cached audio playlist' : 'Fetched audio playlist');
+
+                                        log('⬇️', 'AUDIO', 'Downloading audio track...');
+                                        audioBuffer = await downloadTrack(audioPlaylistBody, audioPlaylistUrl, 'AUD');
+                                    } else {
+                                        ghaWarning('No audio groups found in master playlist — video will be silent');
+                                    }
+
+                                    // ── Write raw tracks ──────────────────────────────────────────
+                                    fs.writeFileSync('tweet_video_raw.mp4', videoBuffer);
+                                    log('✅', 'VIDEO', `Raw video: ${(videoBuffer.length / 1024).toFixed(1)} KB`);
+
+                                    if (audioBuffer) {
+                                        fs.writeFileSync('tweet_audio_raw.mp4', audioBuffer);
+                                        log('✅', 'AUDIO', `Raw audio: ${(audioBuffer.length / 1024).toFixed(1)} KB`);
+
+                                        // ── Mux with ffmpeg ───────────────────────────────────────
+                                        log('🎞️', 'FFMPEG', 'Muxing video + audio...');
+                                        await new Promise((resolve, reject) => {
+                                            execFile('ffmpeg', [
+                                                '-y',
+                                                '-i', 'tweet_video_raw.mp4',
+                                                '-i', 'tweet_audio_raw.mp4',
+                                                '-c', 'copy',
+                                                '-movflags', '+faststart',
+                                                'tweet_video.mp4'
+                                            ], (err, stdout, stderr) => {
+                                                if (err) {
+                                                    ghaError(`ffmpeg failed: ${err.message}`);
+                                                    log('🔬', 'FFMPEG', stderr.slice(-500));
+                                                    reject(err);
+                                                } else {
+                                                    log('✅', 'FFMPEG', 'Mux complete');
+                                                    resolve();
+                                                }
+                                            });
+                                        });
+
+                                        // Cleanup raw tracks
+                                        fs.unlinkSync('tweet_video_raw.mp4');
+                                        fs.unlinkSync('tweet_audio_raw.mp4');
+                                    } else {
+                                        // No audio — just use video track as-is
+                                        fs.renameSync('tweet_video_raw.mp4', 'tweet_video.mp4');
+                                    }
+
+                                    const finalSize = (fs.statSync('tweet_video.mp4').size / 1024).toFixed(1);
+                                    log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${finalSize} KB in ${dlTimer()}`);
                                     best.videoPath = 'tweet_video.mp4';
+
                                 } catch (e) {
-                                    ghaError(`Segment download failed: ${e.message}`);
+                                    ghaError(`Video/audio download or mux failed: ${e.message}`);
+                                    // Cleanup any partial files
+                                    for (const f of ['tweet_video_raw.mp4', 'tweet_audio_raw.mp4']) {
+                                        try { fs.unlinkSync(f); } catch {}
+                                    }
                                 }
                             }
                         } catch (e) {
