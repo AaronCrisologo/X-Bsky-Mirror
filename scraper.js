@@ -277,53 +277,31 @@ async function getLatestTweet(username) {
 
                     log('ℹ️', 'VIDEO', `Streams: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
 
-                    // Chrome's ABR starts low and may never fetch the high-res child playlist,
-                    // so we can't rely on the cache. Instead, use CDP (Chrome DevTools Protocol)
-                    // to directly fetch whichever child playlist we want — this bypasses CORS
-                    // and uses the browser's full cookie context for any domain.
+                    // Child playlist URLs are signed/tokenized (hash in filename) so they
+                    // don't require auth cookies — plain https.get() works fine.
+                    // Use cache if Chrome already fetched it, otherwise fetch directly.
                     streams.sort((a, b) => b.bandwidth - a.bandwidth);
                     const best_stream = streams[0];
-                    log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps`);
-                    log('⬇️', 'VIDEO', `Fetching child playlist via CDP: ${best_stream.url}`);
+                    log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps → ${best_stream.url}`);
 
-                    // First check cache in case Chrome already fetched it
-                    const cachedChild = manifests.find(m => m.url === best_stream.url);
-                    if (cachedChild) {
-                        log('✅', 'VIDEO', `Child playlist found in cache`);
-                    }
-
-                    if (true) { // always attempt, cache check is just a log
+                    if (true) {
                         try {
-                            // Use CDP Network.loadNetworkResource to fetch with browser cookies
-                            const cdpSession = await page.createCDPSession();
-                            const frameId = await page.evaluate(() => document.documentElement.id || '');
-                            const cdpResult = await cdpSession.send('Network.loadNetworkResource', {
-                                url: best_stream.url,
-                                options: { disableCache: false, includeCredentials: true },
-                                frameId: (await page.mainFrame()._id) || undefined,
-                            }).catch(async () => {
-                                // frameId not always needed — retry without it
-                                return cdpSession.send('Network.loadNetworkResource', {
-                                    url: best_stream.url,
-                                    options: { disableCache: false, includeCredentials: true },
+                            const cachedChild = manifests.find(m => m.url === best_stream.url);
+                            const childBody = await (cachedChild ? (
+                                log('✅', 'VIDEO', 'Child playlist found in cache'),
+                                Promise.resolve(cachedChild.body)
+                            ) : new Promise((resolve, reject) => {
+                                log('⬇️', 'VIDEO', `Fetching child playlist via https: ${best_stream.url}`);
+                                const https = require('https');
+                                let data = '';
+                                const req = https.get(best_stream.url, res => {
+                                    log('📡', 'VIDEO', `Child playlist HTTP ${res.statusCode}`);
+                                    res.on('data', chunk => { data += chunk; });
+                                    res.on('end', () => resolve(data));
                                 });
-                            });
-
-                            const childBody = cachedChild ? cachedChild.body :
-                                (cdpResult?.resource?.success ? await (async () => {
-                                    // CDP returns a stream — read it via IO.read
-                                    const streamHandle = cdpResult.resource.stream;
-                                    let data = '';
-                                    while (true) {
-                                        const chunk = await cdpSession.send('IO.read', { handle: streamHandle, size: 65536 });
-                                        data += chunk.data;
-                                        if (chunk.eof) break;
-                                    }
-                                    await cdpSession.send('IO.close', { handle: streamHandle });
-                                    return data;
-                                })() : null);
-
-                            await cdpSession.detach();
+                                req.on('error', reject);
+                                req.setTimeout(10000, () => { req.destroy(); reject(new Error('Child playlist fetch timed out')); });
+                            }));
 
                             log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
 
