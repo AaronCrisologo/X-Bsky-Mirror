@@ -321,23 +321,40 @@ async function getLatestTweet(username) {
                                 ghaWarning('No #EXT-X-MAP .mp4 URI found in child playlist');
                             } else {
                                 log('✅', 'VIDEO', `Resolved: ${videoUrl}`);
+                                log('⬇️', 'VIDEO', `Downloading via https: ${videoUrl}`);
                                 const dlTimer = timer();
-                                const response = await page.goto(videoUrl, { waitUntil: 'networkidle0', timeout: 60000 });
-
-                                if (!response || !response.ok()) {
-                                    ghaError(`Video download HTTP ${response?.status()} — ${videoUrl}`);
-                                } else {
-                                    const buffer = await response.buffer();
-                                    const sizeKb = (buffer.length / 1024).toFixed(1);
-                                    if (buffer.length < 10000) {
-                                        ghaWarning(`Response is only ${sizeKb} KB — likely an error page, not a video`);
-                                        log('🔬', 'VIDEO', `First 300 bytes: ${buffer.slice(0, 300).toString('utf8')}`);
-                                    } else {
-                                        fs.writeFileSync('tweet_video.mp4', buffer);
-                                        log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()}`);
-                                        best.videoPath = 'tweet_video.mp4';
-                                    }
-                                }
+                                // mp4 URL is tokenized — no cookies needed, plain https.get() works.
+                                // page.goto() hangs on media URLs because Chrome streams them
+                                // and never reaches networkidle0.
+                                await new Promise((resolve) => {
+                                    const https = require('https');
+                                    const chunks = [];
+                                    const req = https.get(videoUrl, res => {
+                                        log('📡', 'VIDEO', `HTTP ${res.statusCode} — Content-Length: ${res.headers['content-length'] || 'unknown'}`);
+                                        if (res.statusCode !== 200) {
+                                            ghaError(`Video download HTTP ${res.statusCode}`);
+                                            res.resume();
+                                            resolve();
+                                            return;
+                                        }
+                                        res.on('data', chunk => chunks.push(chunk));
+                                        res.on('end', () => {
+                                            const buffer = Buffer.concat(chunks);
+                                            const sizeKb = (buffer.length / 1024).toFixed(1);
+                                            if (buffer.length < 10000) {
+                                                ghaWarning(`Downloaded only ${sizeKb} KB — may be an error response`);
+                                                log('🔬', 'VIDEO', `First 300 bytes: ${buffer.slice(0, 300).toString('utf8')}`);
+                                            } else {
+                                                fs.writeFileSync('tweet_video.mp4', buffer);
+                                                log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB in ${dlTimer()}`);
+                                                best.videoPath = 'tweet_video.mp4';
+                                            }
+                                            resolve();
+                                        });
+                                    });
+                                    req.on('error', e => { ghaError(`Video download error: ${e.message}`); resolve(); });
+                                    req.setTimeout(120000, () => { ghaError('Video download timed out after 120s'); req.destroy(); resolve(); });
+                                });
                             }
                         } catch (e) {
                             ghaError(`Child playlist / video download threw: ${e.message}`);
