@@ -102,7 +102,7 @@ async function getLatestTweet(username) {
     // We use page.waitForResponse() inside a persistent listener pattern:
     // each time an m3u8 lands we read the body immediately (waitForResponse
     // handles this safely; raw response event handlers do not).
-    const m3u8Bodies = new Map(); // videoId -> playlist text
+    const m3u8Bodies = new Map(); // videoId -> array of { url, body }
 
     const collectM3u8 = () => {
         page.waitForResponse(
@@ -114,7 +114,8 @@ async function getLatestTweet(username) {
             const videoId = m ? m[1] : 'unknown';
             try {
                 const body = await res.text();
-                m3u8Bodies.set(videoId, { url, body });
+                if (!m3u8Bodies.has(videoId)) m3u8Bodies.set(videoId, []);
+                m3u8Bodies.get(videoId).push({ url, body });
                 log('📋', 'M3U8', `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}`);
             } catch (e) {
                 log('⚠️', 'M3U8', `Could not read body for ${url}: ${e.message}`);
@@ -288,12 +289,11 @@ async function getLatestTweet(username) {
                         try {
                             const childRes = await page.goto(best_stream.url, { waitUntil: 'networkidle0', timeout: 15000 });
                             const childBody = childRes ? await childRes.text() : null;
-                            log('📋', 'VIDEO', `Child playlist body:
-${childBody}`);
+                            log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
 
                             // Find the real .mp4?tag= URL
                             let videoUrl = null;
-                            for (const line of (childBody || '').split('').map(l => l.trim())) {
+                            for (const line of (childBody || '').split('\n').map(l => l.trim())) {
                                 if (!line.startsWith('#') && line.includes('.mp4')) {
                                     videoUrl = line.startsWith('https://') ? line : new URL(line, best_stream.url).href;
                                     break;
