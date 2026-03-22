@@ -283,12 +283,16 @@ async function getLatestTweet(username) {
                         streams.sort((a, b) => b.bandwidth - a.bandwidth);
                         const best_stream = streams[0];
                         log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps`);
-                        log('⬇️', 'VIDEO', `Fetching child playlist: ${best_stream.url}`);
+                        log('🔍', 'VIDEO', `Looking up child playlist in cache: ${best_stream.url}`);
 
-                        // Fetch child playlist via page.goto (auth cookies included)
+                        // The child playlist was already captured by collectM3u8 during page load.
+                        // page.goto() on .m3u8 URLs causes ERR_ABORTED — use the cache instead.
                         try {
-                            const childRes = await page.goto(best_stream.url, { waitUntil: 'networkidle0', timeout: 15000 });
-                            const childBody = childRes ? await childRes.text() : null;
+                            const childEntry = manifests.find(m => m.url === best_stream.url);
+                            const childBody = childEntry ? childEntry.body : null;
+                            if (!childBody) {
+                                ghaWarning(`Child playlist not in cache: ${best_stream.url}`);
+                            }
                             log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
 
                             // Find the real .mp4?tag= URL
