@@ -397,13 +397,16 @@ def main():
                 with open(video_path, 'rb') as f:
                     video_data = f.read()
 
+            is_pickup_summon = 'pickup summon' in post_text.lower()
+            log("ℹ️", "MAIN", f"is_pickup_summon={is_pickup_summon} | has_video={has_video} | video_data={'yes' if video_data else 'no'}")
+
             if video_data:
-                # Video is ready — skip image fetching entirely
+                # Pickup summon video — post as video
                 pass
 
-            elif tweet_images_on_disk:
-                log("🖼️", "MAIN",
-                    f"Using {len(tweet_images_on_disk)} tweet image(s)")
+            elif tweet_images_on_disk and not has_video:
+                # Non-video post with images — use tweet images directly
+                log("🖼️", "MAIN", f"Using {len(tweet_images_on_disk)} tweet image(s)")
                 for filename in tweet_images_on_disk:
                     with Image.open(filename) as img:
                         w, h = img.size
@@ -412,13 +415,13 @@ def main():
                         images_to_upload.append(f.read())
 
             else:
-                # No video, no tweet images — try Facebook then fallback
-                if has_video:
-                    log("⚠️", "MAIN",
-                        f"hasVideo=True but video file not on disk (videoPath={video_path or '(none)'}) "
-                        "— scraper may have failed. Trying Facebook...")
+                # Video post (no video file = non-pickup) OR no images → FB → fallback
+                if has_video and not is_pickup_summon:
+                    log("🔍", "MAIN", "Video post (non-pickup) — skipping thumbnail, trying Facebook...")
+                elif has_video:
+                    log("⚠️", "MAIN", f"Pickup video but no file on disk — trying Facebook...")
                 else:
-                    log("🔍", "MAIN", "No tweet images found — trying Facebook...")
+                    log("🔍", "MAIN", "No tweet images — trying Facebook...")
 
                 fb_image_path, fb_text = get_facebook_image()
 
