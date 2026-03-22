@@ -332,9 +332,17 @@ def main():
             aspect_ratios = []
             final_alt_text = "Update"
 
-            # Image priority: tweet images (including video thumbnails) → Facebook (logged in, full-res) → local fallback
-            if not image_urls:
-                print("🔍 [MAIN] No tweet images detected. Fetching Facebook image...")
+            # Check if we have a video file downloaded
+            video_file_path = "tweet_video.mp4"
+            has_video_file = os.path.exists(video_file_path)
+            
+            # Image priority: video → tweet images → Facebook (logged in, full-res) → local fallback
+            if has_video_file:
+                print("🎥 [MAIN] Video detected! Will upload video to Bluesky.")
+                # For video posts, we'll upload the video only (no separate images)
+                # Video will be the primary content
+            elif not image_urls:
+                print("🔍 [MAIN] No tweet images or video detected. Fetching Facebook image...")
                 fb_image_path, fb_text = get_facebook_image()
                 
                 # Always log what we got from Facebook
@@ -374,7 +382,7 @@ def main():
                     else:
                         print(f"❌ [MAIN] Fallback image not found: {chosen_fallback}")
             else:
-                print(f"✅ [MAIN] Using {len(image_urls)} image(s) from tweet (video thumbnail={has_video}).")
+                print(f"✅ [MAIN] Using {len(image_urls)} image(s) from tweet.")
                 for i in range(len(image_urls)):
                     filename = f"tweet_img_{i}.jpg"
                     if os.path.exists(filename):
@@ -431,7 +439,18 @@ def main():
 
             # Send the post
             try:
-                if len(images_to_upload) >= 1:
+                if has_video_file and os.path.exists(video_file_path):
+                    print(f"🎥 [MAIN] Uploading video to Bluesky...")
+                    with open(video_file_path, 'rb') as f:
+                        video_data = f.read()
+                    # Upload video (Bluesky supports MP4, WebM, etc.)
+                    client.send_video(
+                        text=post_text_with_facets,
+                        video=video_data,
+                        alt_text=final_alt_text
+                    )
+                    print(f"✅ [MAIN] Video posted successfully!")
+                elif len(images_to_upload) >= 1:
                     print(f"📤 [MAIN] Posting to Bluesky with {len(images_to_upload)} image(s)...")
                     client.send_images(
                         text=post_text_with_facets,
@@ -439,11 +458,11 @@ def main():
                         image_alts=[final_alt_text] * len(images_to_upload),
                         image_aspect_ratios=aspect_ratios
                     )
+                    print(f"✅ [MAIN] Posted successfully!")
                 else:
                     print("📤 [MAIN] Posting text-only to Bluesky...")
                     client.send_post(post_text_with_facets)
-                
-                print(f"✅ [MAIN] Posted successfully!")
+                    print(f"✅ [MAIN] Posted successfully!")
 
             except Exception as e:
                 print(f"❌ [MAIN] Post failed at API level: {e}")
@@ -462,6 +481,10 @@ def main():
             
             if os.path.exists("temp_manga.jpg"):
                 os.remove("temp_manga.jpg")
+                cleanup_count += 1
+            
+            if os.path.exists("tweet_video.mp4"):
+                os.remove("tweet_video.mp4")
                 cleanup_count += 1
             
             if cleanup_count > 0:

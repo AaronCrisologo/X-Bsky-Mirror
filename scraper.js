@@ -81,29 +81,36 @@ async function getLatestTweet(username) {
                             });
                         }
                         
-                        // Extract images (both regular photos and video thumbnails)
+                        // Extract images (regular photos)
                         let imageUrls = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src);
                         
-                        // If it's a video, also try to extract the thumbnail/poster image
+                        // Extract video URL if it's a video post
+                        let videoUrl = null;
                         if (hasVideo) {
                             const videoPlayer = article.querySelector('[data-testid="videoPlayer"]');
                             if (videoPlayer) {
-                                // Try to find poster attribute on video element
+                                // Try to find video element with src attribute
                                 const videoEl = videoPlayer.querySelector('video');
-                                if (videoEl && videoEl.poster) {
-                                    imageUrls.push(videoEl.poster);
+                                if (videoEl && videoEl.src) {
+                                    videoUrl = videoEl.src;
                                 } else {
-                                    // Try to find a background image on the video player
+                                    // Try to find source elements inside video
+                                    const sourceEls = videoPlayer.querySelectorAll('source');
+                                    for (const source of sourceEls) {
+                                        if (source.src && source.src.includes('.mp4')) {
+                                            videoUrl = source.src;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // If still no video URL, try to extract from background style
+                                if (!videoUrl) {
                                     const bgStyle = videoPlayer.getAttribute('style') || '';
                                     const bgMatch = bgStyle.match(/background-image:\s*url\(['"]?(.+?)['"]?\)/);
                                     if (bgMatch && bgMatch[1]) {
+                                        // This is likely a thumbnail, store separately
                                         imageUrls.push(bgMatch[1]);
-                                    } else {
-                                        // Look for any img inside the video player that might be a thumbnail
-                                        const thumbImg = videoPlayer.querySelector('img');
-                                        if (thumbImg && thumbImg.src) {
-                                            imageUrls.push(thumbImg.src);
-                                        }
                                     }
                                 }
                             }
@@ -114,6 +121,7 @@ async function getLatestTweet(username) {
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
                             hasVideo: hasVideo,
+                            videoUrl: videoUrl,
                             images: imageUrls
                         });
                     }
@@ -132,7 +140,6 @@ async function getLatestTweet(username) {
             return unique[0];
         });
 
-        // If it's a video or has no images, we won't try to download anything
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
             for (let i = 0; i < tweetData.images.length; i++) {
@@ -168,6 +175,27 @@ async function getLatestTweet(username) {
                     process.stderr.write(`Failed image ${i}: ${e.message}\n`);
                     process.stderr.write(`URL attempted: ${highResUrl}\n`);
                 }
+            }
+        }
+
+        // --- VIDEO DOWNLOAD ---
+        if (tweetData && tweetData.videoUrl) {
+            try {
+                process.stderr.write(`Downloading video from: ${tweetData.videoUrl}\n`);
+                const response = await page.goto(tweetData.videoUrl, { 
+                    waitUntil: 'networkidle0',
+                    timeout: 30000  // Videos can be large, give more time
+                });
+                
+                if (response && response.ok()) {
+                    const buffer = await response.buffer();
+                    fs.writeFileSync('tweet_video.mp4', buffer);
+                    process.stderr.write(`Video downloaded successfully (${buffer.length} bytes)\n`);
+                } else {
+                    process.stderr.write(`Failed video download: Invalid response (status: ${response?.status()})\n`);
+                }
+            } catch (e) {
+                process.stderr.write(`Failed video download: ${e.message}\n`);
             }
         }
 
