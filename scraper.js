@@ -416,7 +416,9 @@ async function getLatestTweet(username) {
                                                 '-y',
                                                 '-i', 'tweet_video_raw.mp4',
                                                 '-i', 'tweet_audio_raw.mp4',
-                                                '-c', 'copy',
+                                                '-c:v', 'copy',   // copy video (no re-encode)
+                                                '-c:a', 'aac',    // re-encode audio — forces ffmpeg to compute real duration
+                                                '-b:a', '128k',
                                                 '-movflags', '+faststart',
                                                 'tweet_video.mp4'
                                             ], (err, stdout, stderr) => {
