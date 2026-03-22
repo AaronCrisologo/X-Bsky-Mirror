@@ -188,10 +188,42 @@ async function getLatestTweet(username) {
     const capturedVideoUrls = new Set();
     let reqTotal = 0, reqFailed = 0;
 
-    page.on('response', (response) => {
+    // Capture both .m3u8 manifests (contain the real full-file URLs)
+    // and .mp4 chunks (fallback if manifest parsing fails)
+    const capturedM3u8Urls = new Set();
+
+    page.on('response', async (response) => {
         reqTotal++;
         const url = response.url();
-        if (url.includes('video.twimg.com') && url.includes('.mp4')) {
+        if (!url.includes('video.twimg.com')) return;
+
+        if (url.includes('.m3u8')) {
+            capturedM3u8Urls.add(url);
+            log('📋', 'INTERCEPT', `M3U8 manifest captured (${capturedM3u8Urls.size} total): ${url}`);
+            // Eagerly parse the playlist to extract real video URLs
+            try {
+                const text = await response.text();
+                const lines = text.split('\n');
+                lines.forEach(line => {
+                    line = line.trim();
+                    // Real video lines: full https URL or relative path ending in .mp4?tag=
+                    if (line.startsWith('https://') && line.includes('.mp4')) {
+                        capturedVideoUrls.add(line);
+                        log('🎥', 'M3U8_PARSE', `Real video URL found: ${line}`);
+                    } else if (line.endsWith('.mp4') || line.includes('.mp4?')) {
+                        // Relative URL — make absolute using the manifest base
+                        try {
+                            const abs = new URL(line, url).href;
+                            capturedVideoUrls.add(abs);
+                            log('🎥', 'M3U8_PARSE', `Real video URL (resolved): ${abs}`);
+                        } catch {}
+                    }
+                });
+            } catch (e) {
+                log('⚠️', 'M3U8_PARSE', `Could not read manifest body: ${e.message}`);
+            }
+        } else if (url.includes('.mp4') && !url.match(/\/\d+\/\d+\/[^/]+\.mp4/)) {
+            // Only capture .mp4 URLs that do NOT have the HLS chunk pattern (/0/0/ etc.)
             capturedVideoUrls.add(url);
             log('🎥', 'INTERCEPT', `MP4 captured (${capturedVideoUrls.size} total): ${url}`);
         }
@@ -417,7 +449,7 @@ async function getLatestTweet(username) {
         ghaGroup('📊 Run Summary');
         log('⏱️', 'TIMING', `Total elapsed: ${totalTimer()}`);
         log('🌐', 'NETWORK', `${reqTotal} responses, ${reqFailed} failed`);
-        log('🎥', 'VIDEO', `${capturedVideoUrls.size} MP4 URL(s) intercepted | videoPath: ${best.videoPath || '(none)'}`);
+        log('🎥', 'VIDEO', `${capturedVideoUrls.size} real video URL(s) | ${capturedM3u8Urls.size} M3U8 manifest(s) | videoPath: ${best.videoPath || '(none)'}`);
         log('🖼️', 'IMAGES', `${best.images.length} image(s) in tweet`);
         log('📝', 'TEXT', `${best.text.length} chars | "${best.text.substring(0, 100).replace(/\n/g, ' ')}..."`);
         ghaEndGroup();
