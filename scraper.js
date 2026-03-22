@@ -330,7 +330,26 @@ async function getLatestTweet(username) {
                 const bestUrl = pickBestVideoUrl(Array.from(capturedVideoUrls), best.videoId);
                 const dlTimer = timer();
                 try {
-                    await downloadFile(bestUrl, 'tweet_video.mp4');
+                    // Use page.goto() so Twitter's auth cookies are sent with the request.
+                    // Plain https.get() has no cookies and gets a redirect/error page (~1 KB)
+                    // instead of the actual video.
+                    log('⬇️', 'VIDEO', `Fetching via browser (with cookies): ${bestUrl}`);
+                    const response = await page.goto(bestUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+                    if (!response || !response.ok()) {
+                        ghaError(`${label}: HTTP ${response?.status()} — ${bestUrl}`);
+                        return false;
+                    }
+                    const buffer = await response.buffer();
+                    const sizeKb = (buffer.length / 1024).toFixed(1);
+                    log('ℹ️', 'VIDEO', `Response size: ${sizeKb} KB`);
+                    if (buffer.length < 10000) {
+                        // Suspiciously small — log first 200 bytes as text to diagnose
+                        ghaWarning(`${label}: file is only ${sizeKb} KB — may be an error response`);
+                        log('🔬', 'VIDEO', `First 200 bytes: ${buffer.slice(0, 200).toString('utf8', 0, 200)}`);
+                        return false;
+                    }
+                    fs.writeFileSync('tweet_video.mp4', buffer);
+                    log('💾', 'VIDEO', `Saved tweet_video.mp4 — ${sizeKb} KB`);
                     log('✅', 'VIDEO', `${label} succeeded in ${dlTimer()}`);
                     best.videoPath = 'tweet_video.mp4';
                     return true;
