@@ -243,16 +243,20 @@ async function getLatestTweet(username) {
                 log('ℹ️', 'VIDEO', `Looking up m3u8 for videoId=${best.videoId} (collected: ${m3u8Bodies.size})`);
                 m3u8Bodies.forEach((v, k) => log('  ·', 'VIDEO', `  cached: videoId=${k}`));
 
-                const m3u8 = m3u8Bodies.get(best.videoId);
-                if (!m3u8) {
+                const manifests = m3u8Bodies.get(best.videoId) || [];
+                if (manifests.length === 0) {
                     ghaWarning(`No m3u8 cached for videoId=${best.videoId} — bot.py will use image fallback`);
                 } else {
-                    log('📋', 'VIDEO', `Parsing cached m3u8 from ${m3u8.url}`);
+                    log('📋', 'VIDEO', `Captured ${manifests.length} manifest(s) for this videoId:`);
+                    manifests.forEach((m, i) => log(`  [${i}]`, 'VIDEO', m.url));
+
+                    // Master playlist contains #EXT-X-STREAM-INF; child playlists don't
+                    const m3u8 = manifests.find(m => m.body.includes('#EXT-X-STREAM-INF')) || manifests[0];
+                    log('📋', 'VIDEO', `Selected: ${m3u8.url} (isMaster=${m3u8.body.includes('#EXT-X-STREAM-INF')})`);
 
                     // Parse master playlist — find highest bandwidth child playlist
-                    const lines = m3u8.body.split('').map(l => l.trim()).filter(Boolean);
-                    log('📋', 'VIDEO', `Master playlist body:
-${m3u8.body}`);
+                    const lines = m3u8.body.split('\n').map(l => l.trim()).filter(Boolean);
+                    log('📋', 'VIDEO', `Master playlist body:\n${m3u8.body}`);
 
                     const streams = [];
                     for (let i = 0; i < lines.length; i++) {
