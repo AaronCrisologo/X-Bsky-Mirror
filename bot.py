@@ -280,7 +280,7 @@ def main():
         print("❌ [MAIN] No tweet data received. Skipping.")
         return
 
-    print(f"📊 [MAIN] Tweet data received: hasVideo={tweet_data.get('hasVideo', False)}, image_count={len(tweet_data.get('images', []))}")
+    print(f"📊 [MAIN] Tweet data received: hasVideo={tweet_data.get('hasVideo', False)}, videoUrl={tweet_data.get('videoUrl') is not None}, image_count={len(tweet_data.get('images', []))}")
     
     tweet_time_str = tweet_data.get('time', '')
     is_recent = False
@@ -335,6 +335,7 @@ def main():
             # Check if we have a video file downloaded
             video_file_path = "tweet_video.mp4"
             has_video_file = os.path.exists(video_file_path)
+            print(f"🔍 [DEBUG] Checking for video file: {video_file_path} exists={has_video_file}")
             
             # Image priority: video → tweet images → Facebook (logged in, full-res) → local fallback
             if has_video_file:

@@ -87,43 +87,121 @@ async function getLatestTweet(username) {
                         // Extract video URL if it's a video post
                         let videoUrl = null;
                         if (hasVideo) {
-                            const videoPlayer = article.querySelector('[data-testid="videoPlayer"]');
+                            // Try multiple selectors for video player
+                            const videoPlayer = article.querySelector('[data-testid="videoPlayer"], [data-testid="video"], .PlayableMedia-container, .tweet-video, [data-testid="tweetVideo"]');
+                            
                             if (videoPlayer) {
-                                // Try to find video element with src attribute
+                                // Method 1: Find video element with src
                                 const videoEl = videoPlayer.querySelector('video');
-                                if (videoEl && videoEl.src) {
-                                    videoUrl = videoEl.src;
-                                } else {
-                                    // Try to find source elements inside video
-                                    const sourceEls = videoPlayer.querySelectorAll('source');
-                                    for (const source of sourceEls) {
-                                        if (source.src && source.src.includes('.mp4')) {
-                                            videoUrl = source.src;
+                                if (videoEl) {
+                                    // Check direct src
+                                    if (videoEl.src && videoEl.src.includes('http')) {
+                                        videoUrl = videoEl.src;
+                                    }
+                                    // Check source elements inside video
+                                    if (!videoUrl) {
+                                        const sources = videoEl.querySelectorAll('source');
+                                        for (const source of sources) {
+                                            let src = source.src || source.getAttribute('data-src') || source.getAttribute('data-url');
+                                            if (src && src.includes('http')) {
+                                                videoUrl = src;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    // Check srcset
+                                    if (!videoUrl && videoEl.srcset) {
+                                        const srcset = videoEl.srcset;
+                                        // srcset contains multiple URLs with descriptors, pick the highest quality
+                                        const entries = srcset.split(',').map(s => s.trim());
+                                        // Find MP4 entries, prefer highest resolution
+                                        const mp4Entries = entries.filter(e => e.includes('.mp4') || e.includes('.m3u8'));
+                                        if (mp4Entries.length > 0) {
+                                            // Take the last one (usually highest quality) or the one with highest width
+                                            const best = mp4Entries[mp4Entries.length - 1];
+                                            videoUrl = best.split(' ')[0];
+                                        } else if (entries.length > 0) {
+                                            videoUrl = entries[0].split(' ')[0];
+                                        }
+                                    }
+                                }
+                                
+                                // Method 2: Look for data attributes with video URL
+                                if (!videoUrl) {
+                                    const attrs = ['data-video-url', 'data-url', 'data-src', 'data-video-src', 'data-mp4-url'];
+                                    for (const attr of attrs) {
+                                        const val = videoPlayer.getAttribute(attr);
+                                        if (val && val.includes('http')) {
+                                            videoUrl = val;
                                             break;
                                         }
                                     }
                                 }
                                 
-                                // If still no video URL, try to extract from background style
+                                // Method 3: Look for links/buttons that might contain video URL
+                                if (!videoUrl) {
+                                    const links = videoPlayer.querySelectorAll('a');
+                                    for (const link of links) {
+                                        const href = link.href;
+                                        if (href && (href.includes('.mp4') || href.includes('/video/'))) {
+                                            videoUrl = href;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // Method 4: Search for any script or JSON data in the article that might contain video URL
+                                if (!videoUrl) {
+                                    const scripts = article.querySelectorAll('script');
+                                    for (const script of scripts) {
+                                        const content = script.textContent;
+                                        if (content) {
+                                            // Look for common video URL patterns
+                                            const mp4Match = content.match(/"(https?:\/\/[^"]+\.mp4[^"]*)"/);
+                                            if (mp4Match) {
+                                                videoUrl = mp4Match[1];
+                                                break;
+                                            }
+                                            // Look for video URL in JSON-like structures
+                                            const urlMatch = content.match(/"(https?:\/\/[^"]+(?:\.mp4|\.m3u8)[^"]*)"/);
+                                            if (urlMatch) {
+                                                videoUrl = urlMatch[1];
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // If still no video URL, extract thumbnail from background
                                 if (!videoUrl) {
                                     const bgStyle = videoPlayer.getAttribute('style') || '';
                                     const bgMatch = bgStyle.match(/background-image:\s*url\(['"]?(.+?)['"]?\)/);
                                     if (bgMatch && bgMatch[1]) {
-                                        // This is likely a thumbnail, store separately
                                         imageUrls.push(bgMatch[1]);
                                     }
                                 }
+                                
+                                // Log for debugging
+                                if (videoUrl) {
+                                    console.log(`[DEBUG] Video URL found: ${videoUrl.substring(0, 80)}...`);
+                                } else {
+                                    console.log(`[DEBUG] Could not extract video URL, will fall back to images/thumbnail`);
+                                }
+                            } else {
+                                console.log(`[DEBUG] No video player element found`);
                             }
                         }
                         
-                        results.push({
+                        const result = {
                             text: tweetText,
                             time: timeEl.getAttribute('datetime'),
                             isPinned: pinCheck,
                             hasVideo: hasVideo,
                             videoUrl: videoUrl,
                             images: imageUrls
-                        });
+                        };
+                        console.log(`[DEBUG] Tweet extracted: hasVideo=${hasVideo}, videoUrl=${videoUrl ? 'found' : 'null'}, images=${imageUrls.length}`);
+                        results.push(result);
                     }
                 });
                 window.scrollBy(0, 800);
