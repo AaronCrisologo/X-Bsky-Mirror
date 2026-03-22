@@ -377,18 +377,56 @@ def main():
             aspect_ratios = []
             final_alt_text = "Update"
 
-            # Image priority: tweet images → Facebook (logged in, full-res) → local fallback
-            if has_video or not image_urls:
-                log("🔍", "MAIN", "No tweet images / video — fetching Facebook image...")
+            # ── Image priority ────────────────────────────────────────────
+            # 1. Tweet images (present even on video posts — use them first)
+            # 2. Facebook image (only if text matches, for video-only posts)
+            # 3. Local fallback
+            video_path = tweet_data.get('videoPath')
+
+            tweet_images_on_disk = [
+                f"tweet_img_{i}.jpg"
+                for i in range(len(image_urls))
+                if os.path.exists(f"tweet_img_{i}.jpg")
+            ]
+
+            # ── Video file takes priority over everything ─────────────────
+            video_data = None
+            if video_path and os.path.exists(video_path):
+                video_size_kb = os.path.getsize(video_path) / 1024
+                log("🎬", "MAIN", f"Video file found: {video_path} ({video_size_kb:.1f} KB) — will post as video")
+                with open(video_path, 'rb') as f:
+                    video_data = f.read()
+
+            if video_data:
+                # Video is ready — skip image fetching entirely
+                pass
+
+            elif tweet_images_on_disk:
+                log("🖼️", "MAIN",
+                    f"Using {len(tweet_images_on_disk)} tweet image(s)")
+                for filename in tweet_images_on_disk:
+                    with Image.open(filename) as img:
+                        w, h = img.size
+                        aspect_ratios.append({"width": w, "height": h})
+                    with open(filename, 'rb') as f:
+                        images_to_upload.append(f.read())
+
+            else:
+                # No video, no tweet images — try Facebook then fallback
+                if has_video:
+                    log("⚠️", "MAIN",
+                        f"hasVideo=True but video file not on disk (videoPath={video_path or '(none)'}) "
+                        "— scraper may have failed. Trying Facebook...")
+                else:
+                    log("🔍", "MAIN", "No tweet images found — trying Facebook...")
+
                 fb_image_path, fb_text = get_facebook_image()
-                
-                # Always log what we got from Facebook
+
                 if fb_text:
                     log("📝", "FB", f"Text: {fb_text[:150]}...")
                 else:
                     log("⚠️", "FB", "No text extracted from post")
-                
-                # Only use Facebook image if the text matches the Twitter text
+
                 if fb_image_path and fb_text and texts_match(post_text, fb_text):
                     log("✅", "MAIN", "FB image text matches — using FB image")
                     with Image.open(fb_image_path) as img:
@@ -397,14 +435,12 @@ def main():
                     with open(fb_image_path, 'rb') as f:
                         images_to_upload = [f.read()]
                     final_alt_text = "Update"
-                elif fb_image_path:
-                    gha_warning("FB image text does NOT match Twitter — skipping FB image")
-                    log("  →", "MAIN", f"Twitter : {post_text[:150]}...")
-                    log("  →", "MAIN", f"Facebook: {fb_text[:150] if fb_text else '(no text)'}...")
-                    # Fall through to local fallback
-                    fb_image_path = None
-                
-                if not fb_image_path:
+                else:
+                    if fb_image_path:
+                        gha_warning("FB image text does NOT match Twitter — skipping FB image")
+                        log("  →", "MAIN", f"Twitter : {post_text[:150]}...")
+                        log("  →", "MAIN", f"Facebook: {fb_text[:150] if fb_text else '(no text)'}...")
+
                     log("🔄", "MAIN", "Using local fallback image")
                     chosen_fallback, fallback_alt = get_fallback_data(post_text)
                     final_alt_text = fallback_alt
@@ -418,15 +454,6 @@ def main():
                         log("✅", "MAIN", f"Fallback image loaded: {chosen_fallback}")
                     else:
                         gha_error(f"Fallback image not found: {chosen_fallback}")
-            else:
-                for i in range(len(image_urls)):
-                    filename = f"tweet_img_{i}.jpg"
-                    if os.path.exists(filename):
-                        with Image.open(filename) as img:
-                            w, h = img.size
-                            aspect_ratios.append({"width": w, "height": h})
-                        with open(filename, 'rb') as f:
-                            images_to_upload.append(f.read())
 
             # Truncation
             display_text = post_text
@@ -475,7 +502,15 @@ def main():
 
             # Send the post
             try:
-                if len(images_to_upload) >= 1:
+                if video_data:
+                    video_size_kb = len(video_data) / 1024
+                    log("📤", "MAIN", f"Posting to Bluesky with video ({video_size_kb:.1f} KB)...")
+                    client.send_video(
+                        text=post_text_with_facets,
+                        video=video_data,
+                        video_alt=final_alt_text,
+                    )
+                elif len(images_to_upload) >= 1:
                     log("📤", "MAIN", f"Posting to Bluesky with {len(images_to_upload)} image(s)...")
                     client.send_images(
                         text=post_text_with_facets,
@@ -500,6 +535,10 @@ def main():
                 if os.path.exists(img_file):
                     os.remove(img_file)
                     cleanup_count += 1
+
+            if os.path.exists("tweet_video.mp4"):
+                os.remove("tweet_video.mp4")
+                cleanup_count += 1
 
             if os.path.exists("facebook_img.jpg"):
                 os.remove("facebook_img.jpg")
