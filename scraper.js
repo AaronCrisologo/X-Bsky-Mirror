@@ -277,27 +277,57 @@ async function getLatestTweet(username) {
 
                     log('ℹ️', 'VIDEO', `Streams: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
 
-                    if (streams.length === 0) {
-                        ghaWarning('No streams found in master playlist');
-                    } else {
-                        streams.sort((a, b) => b.bandwidth - a.bandwidth);
-                        const best_stream = streams[0];
-                        log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps`);
-                        log('🔍', 'VIDEO', `Looking up child playlist in cache: ${best_stream.url}`);
+                    // Chrome's ABR starts low and may never fetch the high-res child playlist,
+                    // so we can't rely on the cache. Instead, use CDP (Chrome DevTools Protocol)
+                    // to directly fetch whichever child playlist we want — this bypasses CORS
+                    // and uses the browser's full cookie context for any domain.
+                    streams.sort((a, b) => b.bandwidth - a.bandwidth);
+                    const best_stream = streams[0];
+                    log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps`);
+                    log('⬇️', 'VIDEO', `Fetching child playlist via CDP: ${best_stream.url}`);
 
-                        // The child playlist was already captured by collectM3u8 during page load.
-                        // page.goto() on .m3u8 URLs causes ERR_ABORTED — use the cache instead.
+                    // First check cache in case Chrome already fetched it
+                    const cachedChild = manifests.find(m => m.url === best_stream.url);
+                    if (cachedChild) {
+                        log('✅', 'VIDEO', `Child playlist found in cache`);
+                    }
+
+                    if (true) { // always attempt, cache check is just a log
                         try {
-                            const childEntry = manifests.find(m => m.url === best_stream.url);
-                            const childBody = childEntry ? childEntry.body : null;
-                            if (!childBody) {
-                                ghaWarning(`Child playlist not in cache: ${best_stream.url}`);
-                            }
+                            // Use CDP Network.loadNetworkResource to fetch with browser cookies
+                            const cdpSession = await page.createCDPSession();
+                            const frameId = await page.evaluate(() => document.documentElement.id || '');
+                            const cdpResult = await cdpSession.send('Network.loadNetworkResource', {
+                                url: best_stream.url,
+                                options: { disableCache: false, includeCredentials: true },
+                                frameId: (await page.mainFrame()._id) || undefined,
+                            }).catch(async () => {
+                                // frameId not always needed — retry without it
+                                return cdpSession.send('Network.loadNetworkResource', {
+                                    url: best_stream.url,
+                                    options: { disableCache: false, includeCredentials: true },
+                                });
+                            });
+
+                            const childBody = cachedChild ? cachedChild.body :
+                                (cdpResult?.resource?.success ? await (async () => {
+                                    // CDP returns a stream — read it via IO.read
+                                    const streamHandle = cdpResult.resource.stream;
+                                    let data = '';
+                                    while (true) {
+                                        const chunk = await cdpSession.send('IO.read', { handle: streamHandle, size: 65536 });
+                                        data += chunk.data;
+                                        if (chunk.eof) break;
+                                    }
+                                    await cdpSession.send('IO.close', { handle: streamHandle });
+                                    return data;
+                                })() : null);
+
+                            await cdpSession.detach();
+
                             log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
 
-                            // The real video file is in the #EXT-X-MAP URI —
-                            // it's the initialization segment containing the full mp4.
-                            // Non-comment .mp4 lines are HLS byte-range chunks, not the full file.
+                            // The real video file URL is in #EXT-X-MAP:URI
                             let videoUrl = null;
                             for (const line of (childBody || '').split('\n').map(l => l.trim())) {
                                 const mapMatch = line.match(/^#EXT-X-MAP:URI="([^"]+\.mp4[^"]*)"/);
