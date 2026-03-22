@@ -410,7 +410,9 @@ async function getLatestTweet(username) {
                                         // ── Mux with ffmpeg ───────────────────────────────────────
                                         log('🎞️', 'FFMPEG', 'Muxing video + audio...');
                                         await new Promise((resolve, reject) => {
-                                            execFile('ffmpeg', [
+                                            const ffmpegPath = require('ffmpeg-static');
+                                        log('ℹ️', 'FFMPEG', `Using binary: ${ffmpegPath}`);
+                                        execFile(ffmpegPath, [
                                                 '-y',
                                                 '-i', 'tweet_video_raw.mp4',
                                                 '-i', 'tweet_audio_raw.mp4',
