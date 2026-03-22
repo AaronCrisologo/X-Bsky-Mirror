@@ -295,17 +295,22 @@ async function getLatestTweet(username) {
                             }
                             log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
 
-                            // Find the real .mp4?tag= URL
+                            // The real video file is in the #EXT-X-MAP URI —
+                            // it's the initialization segment containing the full mp4.
+                            // Non-comment .mp4 lines are HLS byte-range chunks, not the full file.
                             let videoUrl = null;
                             for (const line of (childBody || '').split('\n').map(l => l.trim())) {
-                                if (!line.startsWith('#') && line.includes('.mp4')) {
-                                    videoUrl = line.startsWith('https://') ? line : new URL(line, best_stream.url).href;
+                                const mapMatch = line.match(/^#EXT-X-MAP:URI="([^"]+\.mp4[^"]*)"/);
+                                if (mapMatch) {
+                                    const uri = mapMatch[1];
+                                    videoUrl = uri.startsWith('https://') ? uri : new URL(uri, best_stream.url).href;
+                                    log('✅', 'VIDEO', `Found EXT-X-MAP URI: ${videoUrl}`);
                                     break;
                                 }
                             }
 
                             if (!videoUrl) {
-                                ghaWarning('No .mp4 URL found in child playlist');
+                                ghaWarning('No #EXT-X-MAP .mp4 URI found in child playlist');
                             } else {
                                 log('✅', 'VIDEO', `Resolved: ${videoUrl}`);
                                 const dlTimer = timer();
