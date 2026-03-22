@@ -27,20 +27,35 @@ async function getLatestTweet(username) {
     });
 
     const page = await browser.newPage();
+    
+    // Set up request interception to capture video URLs
+    let capturedVideoUrl = null;
+    page.on('request', (req) => {
+        const url = req.url();
+        // Capture video requests (MP4, WebM, etc.)
+        if (url.includes('.mp4') || url.includes('.webm') || url.includes('/video/')) {
+            console.log(`[INTERCEPT] Video request detected: ${url.substring(0, 100)}...`);
+            if (!capturedVideoUrl) {
+                capturedVideoUrl = url;
+            }
+        }
+    });
+    
+    // Also listen for response to get final URLs after redirects
+    page.on('response', (res) => {
+        const url = res.url();
+        const contentType = res.headers()['content-type'] || '';
+        if (contentType.includes('video') || url.includes('.mp4') || url.includes('.webm')) {
+            console.log(`[INTERCEPT] Video response: ${url.substring(0, 100)}... (content-type: ${contentType})`);
+            if (!capturedVideoUrl) {
+                capturedVideoUrl = url;
+            }
+        }
+    });
+
     try {
         await page.setCookie(...rawCookies);
         await page.setViewport({ width: 1280, height: 1000 });
-
-        // Enable request interception to capture video URLs
-        const videoUrls = new Set();
-        page.on('request', request => {
-            const url = request.url();
-            // Capture video requests (MP4, WebM, etc.)
-            if (url.includes('.mp4') || url.includes('.webm') || url.includes('/video/')) {
-                console.log(`[NETWORK] Video request detected: ${url.substring(0, 100)}...`);
-                videoUrls.add(url);
-            }
-        });
 
         // Go to the "Replies" tab or just the profile.
         // Adding /with_replies often forces X to bypass some cached layout issues.
@@ -233,6 +248,12 @@ async function getLatestTweet(username) {
             // Return the newest post (pinned or not)
             return unique[0];
         });
+
+        // If we captured a video URL via interception, use it instead of blob URL
+        if (tweetData && tweetData.hasVideo && capturedVideoUrl && tweetData.videoUrl?.startsWith('blob:')) {
+            console.log(`[INTERCEPT] Replacing blob URL with captured HTTP video URL: ${capturedVideoUrl.substring(0, 100)}...`);
+            tweetData.videoUrl = capturedVideoUrl;
+        }
 
         // --- HIGH-RES IMAGE DOWNLOAD ---
         if (tweetData && tweetData.images.length > 0) {
