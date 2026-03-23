@@ -506,24 +506,15 @@ def main():
             try:
                 if video_data:
                     video_size_kb = len(video_data) / 1024
-                    # Read actual video dimensions so Bluesky displays the correct aspect ratio
+                    # Use resolution from scraper JSON (parsed from master playlist)
                     video_aspect_ratio = None
-                    try:
-                        import subprocess as sp
-                        probe = sp.run(
-                            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
-                             '-show_entries', 'stream=width,height',
-                             '-of', 'csv=p=0', video_path],
-                            capture_output=True, text=True, timeout=10
-                        )
-                        if probe.returncode == 0 and probe.stdout.strip():
-                            w, h = map(int, probe.stdout.strip().split(','))
-                            video_aspect_ratio = {"width": w, "height": h}
-                            log("📐", "MAIN", f"Video dimensions: {w}x{h}")
-                        else:
-                            log("⚠️", "MAIN", f"ffprobe failed: {probe.stderr.strip()}")
-                    except Exception as e:
-                        log("⚠️", "MAIN", f"Could not probe video dimensions: {e}")
+                    vw = tweet_data.get('videoWidth')
+                    vh = tweet_data.get('videoHeight')
+                    if vw and vh:
+                        video_aspect_ratio = {"width": vw, "height": vh}
+                        log("📐", "MAIN", f"Video dimensions: {vw}x{vh}")
+                    else:
+                        log("⚠️", "MAIN", "No video dimensions in scraper output — posting without aspect ratio")
 
                     log("📤", "MAIN", f"Posting to Bluesky with video ({video_size_kb:.1f} KB)...")
                     send_kwargs = dict(
