@@ -396,7 +396,7 @@ def main():
                 with open(video_path, 'rb') as f:
                     video_data = f.read()
 
-            is_pickup_summon = 'pickup summon' in post_text.lower()
+            is_pickup_summon = 'pickup summon' in post_text.lower() or 'servant tactics' in post_text.lower()
             log("ℹ️", "MAIN", f"is_pickup_summon={is_pickup_summon} | has_video={has_video} | video_data={'yes' if video_data else 'no'}")
 
             if video_data:
