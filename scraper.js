@@ -194,13 +194,28 @@ async function getLatestTweet(username) {
                         }
                     }
 
+                    let imageUrls = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src);
+                    
+                    // If video present, also capture its thumbnail/poster
+                    if (hasVideo) {
+                        const videoEl = article.querySelector('video');
+                        if (videoEl?.poster) {
+                            imageUrls.push(videoEl.poster);
+                        } else {
+                            // Fallback: look for video thumbnail images
+                            article.querySelectorAll('img[src*="ext_tw_video_thumb"]').forEach(img => {
+                                if (!imageUrls.includes(img.src)) imageUrls.push(img.src);
+                            });
+                        }
+                    }
+                    
                     results.push({
                         text:     tweetText,
                         time:     timeEl.getAttribute('datetime'),
                         isPinned,
                         hasVideo,
                         videoId,
-                        images:   Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src)
+                        images:   imageUrls
                     });
                 });
                 window.scrollBy(0, 800);
