@@ -194,20 +194,11 @@ async function getLatestTweet(username) {
                         }
                     }
 
-                    let imageUrls = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img')).map(img => img.src);
-                    
-                    // If video present, also capture its thumbnail/poster
-                    if (hasVideo) {
-                        const videoEl = article.querySelector('video');
-                        if (videoEl?.poster) {
-                            imageUrls.push(videoEl.poster);
-                        } else {
-                            // Fallback: look for video thumbnail images
-                            article.querySelectorAll('img[src*="ext_tw_video_thumb"]').forEach(img => {
-                                if (!imageUrls.includes(img.src)) imageUrls.push(img.src);
-                            });
-                        }
-                    }
+                    // Collect unique image URLs (dedupe)
+                    const imageSet = new Set();
+                    article.querySelectorAll('[data-testid="tweetPhoto"] img').forEach(img => {
+                        if (img.src) imageSet.add(img.src);
+                    });
                     
                     results.push({
                         text:     tweetText,
@@ -215,7 +206,7 @@ async function getLatestTweet(username) {
                         isPinned,
                         hasVideo,
                         videoId,
-                        images:   imageUrls
+                        images:   Array.from(imageSet)
                     });
                 });
                 window.scrollBy(0, 800);
@@ -249,10 +240,7 @@ async function getLatestTweet(username) {
         ghaEndGroup();
 
         // ── Video download ────────────────────────────────────────────────────
-        const isPickupSummon = best.text.toLowerCase().includes('pickup summon');
-        log('ℹ️', 'VIDEO', `isPickupSummon=${isPickupSummon} | hasVideo=${best.hasVideo}`);
-
-        if (best.hasVideo && isPickupSummon) {
+        if (best.hasVideo) {
             ghaGroup('🎬 Video Download');
             const videoTimer = timer();
 
@@ -434,13 +422,6 @@ async function getLatestTweet(username) {
                                     const finalSize = (fs.statSync('tweet_video.mp4').size / 1024).toFixed(1);
                                     log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${finalSize} KB in ${dlTimer()}`);
                                     best.videoPath = 'tweet_video.mp4';
-                                    // Pass resolution so bot.py can set correct aspect ratio without ffprobe
-                                    const resParts = best_stream.resolution.split('x');
-                                    if (resParts.length === 2) {
-                                        best.videoWidth  = parseInt(resParts[0]);
-                                        best.videoHeight = parseInt(resParts[1]);
-                                        log('📐', 'VIDEO', `Resolution: ${best.videoWidth}x${best.videoHeight}`);
-                                    }
 
                                 } catch (e) {
                                     ghaError(`Video/audio download or mux failed: ${e.message}`);
