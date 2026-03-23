@@ -6,7 +6,6 @@ from atproto import Client, client_utils
 import subprocess
 import json
 import os
-import sys
 import re
 from PIL import Image
 
@@ -119,148 +118,6 @@ def get_latest_tweet_data():
         import traceback; traceback.print_exc()
         gha_end_group()
         return None
-
-
-def get_facebook_image():
-    """
-    Runs scraper_facebook.js to grab the latest post image and text from the Facebook page.
-    Returns a tuple (image_path, fb_text) on success, or (None, None) on failure.
-    """
-    try:
-        my_env = os.environ.copy()
-        my_env["PYTHONIOENCODING"] = "utf-8"
-        my_env["PYTHONUTF8"] = "1"
-
-        log("🚀", "FB", "Spawning scraper_facebook.js...")
-
-        result = subprocess.run(
-            ['node', 'scraper_facebook.js'],
-            capture_output=True,
-            text=False,
-            env=my_env,
-            timeout=60
-        )
-
-        if result.stderr:
-            stderr_text = result.stderr.decode('utf-8', errors='ignore')
-            log("⚠️", "FB", f"stderr: {stderr_text.strip()}")
-
-        if not result.stdout:
-            gha_error("FB scraper returned no output")
-            return None, None
-
-        json_output = result.stdout.decode('utf-8', errors='strict').strip()
-
-        if "{" not in json_output:
-            gha_error("FB scraper output was not JSON")
-            return None, None
-
-        data = json.loads(json_output)
-
-        if "error" in data:
-            gha_error(f"FB scraper error: {data['error']}")
-            return None, None
-
-        image_path = data.get("imagePath")
-        fb_text = data.get("text", "")
-        
-        if fb_text:
-            # Clean up Facebook text for comparison
-            fb_text = fb_text.strip()
-            # Remove excessive whitespace
-            fb_text = re.sub(r'\s+', ' ', fb_text)
-            log("📝", "FB", f"Text extracted: {fb_text[:150]}...")
-        else:
-            log("⚠️", "FB", "No text extracted from Facebook post")
-        
-        if image_path and os.path.exists(image_path):
-            log("✅", "FB", f"Image retrieved: {image_path}")
-            return image_path, fb_text
-
-        gha_warning("FB: image file not found on disk")
-        return None, fb_text
-
-    except subprocess.TimeoutExpired:
-        gha_error("FB scraper timed out")
-        return None, None
-    except Exception as e:
-        gha_error(f"FB scraper exception: {e}")
-        return None, None
-
-
-# === Text comparison utilities ===
-def normalize_text_for_comparison(text):
-    """Normalize text for fuzzy matching: lowercase, remove extra whitespace, strip URLs."""
-    if not text:
-        return ""
-    # Convert to lowercase
-    text = text.lower()
-    # Remove URLs (they may differ slightly)
-    text = re.sub(r'https?://\S+', '', text)
-    text = re.sub(r'www\.\S+', '', text)
-    # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text)
-    # Strip leading/trailing whitespace
-    return text.strip()
-
-
-def texts_match(twitter_text, facebook_text, threshold=0.8):
-    """
-    Check if Twitter and Facebook texts match.
-    Uses exact match first, then fuzzy matching based on word overlap.
-    Returns True if similarity >= threshold.
-    """
-    if not twitter_text or not facebook_text:
-        log("⚠️", "MATCH", f"Cannot compare: twitter_text={'✓' if twitter_text else '✗'}, facebook_text={'✓' if facebook_text else '✗'}")
-        return False
-    
-    # Normalize both texts
-    norm_twitter = normalize_text_for_comparison(twitter_text)
-    norm_facebook = normalize_text_for_comparison(facebook_text)
-    
-    log("🔍", "MATCH", "Comparing texts:")
-    log("  →", "MATCH", f"Twitter  : {norm_twitter[:150]}...")
-    log("  →", "MATCH", f"Facebook : {norm_facebook[:150]}...")
-    
-    # Exact match after normalization
-    if norm_twitter == norm_facebook:
-        log("✅", "MATCH", "Exact match after normalization")
-        return True
-    
-    # Check if one is contained in the other (at least 80% of the shorter text)
-    words_twitter = set(norm_twitter.split())
-    words_facebook = set(norm_facebook.split())
-    
-    if not words_twitter or not words_facebook:
-        gha_warning("MATCH: one or both texts empty after normalization")
-        return False
-    
-    # Calculate Jaccard similarity (intersection over union)
-    intersection = len(words_twitter.intersection(words_facebook))
-    union = len(words_twitter.union(words_facebook))
-    
-    if union == 0:
-        gha_warning("MATCH: union of words is empty")
-        return False
-    
-    similarity = intersection / union
-    
-    # Also check if the shorter text is mostly contained in the longer
-    shorter_len = min(len(words_twitter), len(words_facebook))
-    shorter_containment = intersection / shorter_len if shorter_len > 0 else 0
-    
-    log("📊", "MATCH", f"intersection={intersection} union={union} similarity={similarity:.2%} containment={shorter_containment:.2%}")
-    
-    if shorter_containment >= threshold:
-        log("✅", "MATCH", f"Shorter containment {shorter_containment:.2%} >= threshold {threshold:.2%}")
-        return True
-    
-    if similarity >= threshold:
-        log("✅", "MATCH", f"Jaccard similarity {similarity:.2%} >= threshold {threshold:.2%}")
-        return True
-    
-    log("❌", "MATCH", f"No match — similarity {similarity:.2%} < threshold {threshold:.2%}")
-    return False
 
 
 # === Bluesky: Check if already posted ===
@@ -377,8 +234,8 @@ def main():
             final_alt_text = "Update"
 
             # ── Image priority ────────────────────────────────────────────
-            # 1. Tweet images (present even on video posts — use them first)
-            # 2. Facebook image (only if text matches, for video-only posts)
+            # 1. Video file (highest priority for pickup summon videos)
+            # 2. Tweet images (including video thumbnails for non-pickup videos)
             # 3. Local fallback
             video_path = tweet_data.get('videoPath')
 
@@ -403,9 +260,10 @@ def main():
                 # Pickup summon video — post as video
                 pass
 
-            elif tweet_images_on_disk and not has_video:
-                # Non-video post with images — use tweet images directly
-                log("🖼️", "MAIN", f"Using {len(tweet_images_on_disk)} tweet image(s)")
+            elif tweet_images_on_disk:
+                # Use tweet images (including video thumbnails) for any post with images
+                # This includes both regular image posts and video posts (where the thumbnail is captured)
+                log("🖼️", "MAIN", f"Using {len(tweet_images_on_disk)} tweet image(s) (including video thumbnails if present)")
                 for filename in tweet_images_on_disk:
                     with Image.open(filename) as img:
                         w, h = img.size
@@ -414,48 +272,20 @@ def main():
                         images_to_upload.append(f.read())
 
             else:
-                # Video post (no video file = non-pickup) OR no images → FB → fallback
-                if has_video and not is_pickup_summon:
-                    log("🔍", "MAIN", "Video post (non-pickup) — skipping thumbnail, trying Facebook...")
-                elif has_video:
-                    log("⚠️", "MAIN", f"Pickup video but no file on disk — trying Facebook...")
-                else:
-                    log("🔍", "MAIN", "No tweet images — trying Facebook...")
+                # No images at all from Twitter → use local fallback
+                log("🔄", "MAIN", "No tweet images available — using local fallback image")
+                chosen_fallback, fallback_alt = get_fallback_data(post_text)
+                final_alt_text = fallback_alt
 
-                fb_image_path, fb_text = get_facebook_image()
-
-                if fb_text:
-                    log("📝", "FB", f"Text: {fb_text[:150]}...")
-                else:
-                    log("⚠️", "FB", "No text extracted from post")
-
-                if fb_image_path and fb_text and texts_match(post_text, fb_text):
-                    log("✅", "MAIN", "FB image text matches — using FB image")
-                    with Image.open(fb_image_path) as img:
+                if os.path.exists(chosen_fallback):
+                    with Image.open(chosen_fallback) as img:
                         w, h = img.size
                         aspect_ratios = [{"width": w, "height": h}]
-                    with open(fb_image_path, 'rb') as f:
+                    with open(chosen_fallback, 'rb') as f:
                         images_to_upload = [f.read()]
-                    final_alt_text = "Update"
+                    log("✅", "MAIN", f"Fallback image loaded: {chosen_fallback}")
                 else:
-                    if fb_image_path:
-                        gha_warning("FB image text does NOT match Twitter — skipping FB image")
-                        log("  →", "MAIN", f"Twitter : {post_text[:150]}...")
-                        log("  →", "MAIN", f"Facebook: {fb_text[:150] if fb_text else '(no text)'}...")
-
-                    log("🔄", "MAIN", "Using local fallback image")
-                    chosen_fallback, fallback_alt = get_fallback_data(post_text)
-                    final_alt_text = fallback_alt
-
-                    if os.path.exists(chosen_fallback):
-                        with Image.open(chosen_fallback) as img:
-                            w, h = img.size
-                            aspect_ratios = [{"width": w, "height": h}]
-                        with open(chosen_fallback, 'rb') as f:
-                            images_to_upload = [f.read()]
-                        log("✅", "MAIN", f"Fallback image loaded: {chosen_fallback}")
-                    else:
-                        gha_error(f"Fallback image not found: {chosen_fallback}")
+                    gha_error(f"Fallback image not found: {chosen_fallback}")
 
             # Truncation
             display_text = post_text
@@ -555,10 +385,6 @@ def main():
                 os.remove("tweet_video.mp4")
                 cleanup_count += 1
 
-            if os.path.exists("facebook_img.jpg"):
-                os.remove("facebook_img.jpg")
-                cleanup_count += 1
-            
             if os.path.exists("temp_manga.jpg"):
                 os.remove("temp_manga.jpg")
                 cleanup_count += 1
