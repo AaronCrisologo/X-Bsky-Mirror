@@ -240,7 +240,7 @@ async function getLatestTweet(username) {
         ghaEndGroup();
 
         // ── Video download ────────────────────────────────────────────────────
-        const isPickupSummon = best.text.toLowerCase().includes('pickup summon');
+        const isPickupSummon = best.text.toLowerCase().includes('pickup summon') || best.text.toLowerCase().includes('servant tactics');
         log('ℹ️', 'VIDEO', `isPickupSummon=${isPickupSummon} | hasVideo=${best.hasVideo}`);
 
         if (best.hasVideo && isPickupSummon) {
