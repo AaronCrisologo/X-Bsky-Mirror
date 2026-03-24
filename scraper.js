@@ -240,7 +240,10 @@ async function getLatestTweet(username) {
         ghaEndGroup();
 
         // ── Video download ────────────────────────────────────────────────────
-        if (best.hasVideo) {
+        const isPickupSummon = best.text.toLowerCase().includes('pickup summon');
+        log('ℹ️', 'VIDEO', `isPickupSummon=${isPickupSummon} | hasVideo=${best.hasVideo}`);
+
+        if (best.hasVideo && isPickupSummon) {
             ghaGroup('🎬 Video Download');
             const videoTimer = timer();
 
@@ -422,6 +425,13 @@ async function getLatestTweet(username) {
                                     const finalSize = (fs.statSync('tweet_video.mp4').size / 1024).toFixed(1);
                                     log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${finalSize} KB in ${dlTimer()}`);
                                     best.videoPath = 'tweet_video.mp4';
+                                    // Pass resolution so bot.py can set correct aspect ratio without ffprobe
+                                    const resParts = best_stream.resolution.split('x');
+                                    if (resParts.length === 2) {
+                                        best.videoWidth  = parseInt(resParts[0]);
+                                        best.videoHeight = parseInt(resParts[1]);
+                                        log('📐', 'VIDEO', `Resolution: ${best.videoWidth}x${best.videoHeight}`);
+                                    }
 
                                 } catch (e) {
                                     ghaError(`Video/audio download or mux failed: ${e.message}`);
