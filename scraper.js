@@ -270,7 +270,7 @@ async function getLatestTweet(username) {
             ghaGroup('🎬 Video Download');
             const videoTimer = timer();
 
-            if (best.hasVideo) {
+            if (!best.videoId) {
                 ghaWarning('hasVideo=true but could not extract videoId from DOM — skipping video');
             } else {
                 log('ℹ️', 'VIDEO', `Looking up m3u8 for videoId=${best.videoId} (collected: ${m3u8Bodies.size})`);
