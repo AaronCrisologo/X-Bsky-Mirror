@@ -105,23 +105,21 @@ async function getLatestTweet(username) {
     const m3u8Bodies = new Map(); // videoId -> array of { url, body }
 
     const collectM3u8 = () => {
-        page.waitForResponse(
-            res => res.url().includes('video.twimg.com') && res.url().includes('.m3u8'),
-            { timeout: 60000 }
-        ).then(async (res) => {
+        page.on('response', async (res) => {
             const url = res.url();
-            const m = url.match(/ext_tw_video\/(\d+)\//);
-            const videoId = m ? m[1] : 'unknown';
-            try {
-                const body = await res.text();
-                if (!m3u8Bodies.has(videoId)) m3u8Bodies.set(videoId, []);
-                m3u8Bodies.get(videoId).push({ url, body });
-                log('📋', 'M3U8', `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}`);
-            } catch (e) {
-                log('⚠️', 'M3U8', `Could not read body for ${url}: ${e.message}`);
+            if (url.includes('video.twimg.com') && url.includes('.m3u8')) {
+                const m = url.match(/ext_tw_video\/(\d+)\//);
+                const videoId = m ? m[1] : 'unknown';
+                try {
+                    const body = await res.text();
+                    if (!m3u8Bodies.has(videoId)) m3u8Bodies.set(videoId, []);
+                    m3u8Bodies.get(videoId).push({ url, body });
+                    log('📋', 'M3U8', `Captured manifest for videoId=${videoId}`);
+                } catch (e) {
+                    // Silently ignore errors from destroyed contexts
+                }
             }
-            collectM3u8(); // re-arm for next m3u8
-        }).catch(() => {}); // timeout or navigation — silently ignore
+        });
     };
     collectM3u8(); // arm before page loads
 
