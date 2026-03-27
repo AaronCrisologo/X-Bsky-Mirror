@@ -266,7 +266,7 @@ async function getLatestTweet(username) {
         // ── Video download ────────────────────────────────────────────────────
         log('ℹ️', 'VIDEO', `hasVideo=${best.hasVideo}`);
 
-        if (best.hasVideo && isPickupSummon) {
+        if (best.hasVideo) {
             ghaGroup('🎬 Video Download');
             const videoTimer = timer();
 
