@@ -103,11 +103,13 @@ async function getLatestTweet(username) {
     // each time an m3u8 lands we read the body immediately (waitForResponse
     // handles this safely; raw response event handlers do not).
     const m3u8Bodies = new Map(); // videoId -> array of { url, body }
+    let collectingM3u8 = true; // set to false to stop re-arming
 
     const collectM3u8 = () => {
+        if (!collectingM3u8) return;
         page.waitForResponse(
             res => res.url().includes('video.twimg.com') && res.url().includes('.m3u8'),
-            { timeout: 60000 }
+            { timeout: 30000 }  // short timeout — re-arms frequently so we don't miss any
         ).then(async (res) => {
             const url = res.url();
             const m = url.match(/ext_tw_video\/(\d+)\//);
@@ -121,7 +123,9 @@ async function getLatestTweet(username) {
                 log('⚠️', 'M3U8', `Could not read body for ${url}: ${e.message}`);
             }
             collectM3u8(); // re-arm for next m3u8
-        }).catch(() => {}); // timeout or navigation — silently ignore
+        }).catch(() => {
+            collectM3u8(); // re-arm after timeout miss too
+        });
     };
     collectM3u8(); // arm before page loads
 
@@ -142,17 +146,8 @@ async function getLatestTweet(username) {
         await page.setViewport({ width: 1280, height: 1000 });
 
         const navTimer = timer();
-        await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2', timeout: 30000 });
-        const finalUrl = page.url();
-        log('✅', 'NAV', `Settled at ${finalUrl} in ${navTimer()}`);
-
-        // Detect login redirect — cookies may have expired
-        if (finalUrl.includes('/login') || finalUrl.includes('twitter.com/login') || finalUrl.includes('x.com/i/flow')) {
-            ghaError(`Redirected to login page: ${finalUrl} — auth cookies may have expired`);
-            console.error('{"error": "auth_redirect"}');
-            await browser.close();
-            process.exit(1);
-        }
+        await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
+        log('✅', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
 
         const selectorTimer = timer();
         await page.waitForSelector('article', { timeout: 30000 });
@@ -509,6 +504,7 @@ async function getLatestTweet(username) {
         log('💥', 'FATAL', error.stack || error.message);
         console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
     } finally {
+        collectingM3u8 = false; // stop re-arming so Node can exit cleanly
         await browser.close();
         log('🛑', 'DONE', `Browser closed — total: ${totalTimer()}`);
     }
