@@ -103,13 +103,11 @@ async function getLatestTweet(username) {
     // each time an m3u8 lands we read the body immediately (waitForResponse
     // handles this safely; raw response event handlers do not).
     const m3u8Bodies = new Map(); // videoId -> array of { url, body }
-    let collectingM3u8 = true; // set to false to stop re-arming
 
     const collectM3u8 = () => {
-        if (!collectingM3u8) return;
         page.waitForResponse(
             res => res.url().includes('video.twimg.com') && res.url().includes('.m3u8'),
-            { timeout: 30000 }  // short timeout — re-arms frequently so we don't miss any
+            { timeout: 60000 }
         ).then(async (res) => {
             const url = res.url();
             const m = url.match(/ext_tw_video\/(\d+)\//);
@@ -123,9 +121,7 @@ async function getLatestTweet(username) {
                 log('⚠️', 'M3U8', `Could not read body for ${url}: ${e.message}`);
             }
             collectM3u8(); // re-arm for next m3u8
-        }).catch(() => {
-            collectM3u8(); // re-arm after timeout miss too
-        });
+        }).catch(() => {}); // timeout or navigation — silently ignore
     };
     collectM3u8(); // arm before page loads
 
@@ -498,13 +494,14 @@ async function getLatestTweet(username) {
         ghaEndGroup();
 
         console.log(JSON.stringify(best));
+        process.exit(0); // exit immediately — no need to wait for pending async operations
 
     } catch (error) {
         ghaError(`Unhandled exception: ${error.message}`);
         log('💥', 'FATAL', error.stack || error.message);
         console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
+        process.exit(1);
     } finally {
-        collectingM3u8 = false; // stop re-arming so Node can exit cleanly
         await browser.close();
         log('🛑', 'DONE', `Browser closed — total: ${totalTimer()}`);
     }
