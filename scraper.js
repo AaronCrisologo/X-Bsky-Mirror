@@ -240,10 +240,9 @@ async function getLatestTweet(username) {
         ghaEndGroup();
 
         // ── Video download ────────────────────────────────────────────────────
-        const isPickupSummon = best.text.toLowerCase().includes('pickup summon') || best.text.toLowerCase().includes('system summoned');
-        log('ℹ️', 'VIDEO', `isPickupSummon=${isPickupSummon} | hasVideo=${best.hasVideo}`);
+        log('ℹ️', 'VIDEO', `hasVideo=${best.hasVideo}`);
 
-        if (best.hasVideo && isPickupSummon) {
+        if (best.hasVideo) {
             ghaGroup('🎬 Video Download');
             const videoTimer = timer();
 
@@ -313,6 +312,17 @@ async function getLatestTweet(username) {
                             }));
 
                             log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
+
+                            // Compute total video duration from #EXTINF tags
+                            const totalDuration = (childBody || '').split('\n')
+                                .map(l => l.trim())
+                                .filter(l => l.startsWith('#EXTINF:'))
+                                .reduce((sum, l) => sum + parseFloat(l.replace('#EXTINF:', '').replace(',', '')), 0);
+                            log('⏱️', 'VIDEO', `Video duration: ${totalDuration.toFixed(2)}s`);
+
+                            if (totalDuration <= 10) {
+                                log('ℹ️', 'VIDEO', `Duration ≤10s — skipping video download, thumbnail will be used instead`);
+                            } else {
 
                             // The real video file URL is in #EXT-X-MAP:URI
                             let videoUrl = null;
@@ -440,6 +450,7 @@ async function getLatestTweet(username) {
                                     }
                                 }
                             }
+                            } // end duration > 10 else block
                         } catch (e) {
                             ghaError(`Child playlist / video download threw: ${e.message}`);
                         }
