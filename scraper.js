@@ -103,25 +103,26 @@ async function getLatestTweet(username) {
     // each time an m3u8 lands we read the body immediately (waitForResponse
     // handles this safely; raw response event handlers do not).
     const m3u8Bodies = new Map(); // videoId -> array of { url, body }
+    const m3u8Logs = [];          // Buffer for our background logs
 
-    const collectM3u8 = () => {
-        page.on('response', async (res) => {
-            const url = res.url();
-            if (url.includes('video.twimg.com') && url.includes('.m3u8')) {
-                const m = url.match(/ext_tw_video\/(\d+)\//);
-                const videoId = m ? m[1] : 'unknown';
-                try {
-                    const body = await res.text();
-                    if (!m3u8Bodies.has(videoId)) m3u8Bodies.set(videoId, []);
-                    m3u8Bodies.get(videoId).push({ url, body });
-                    log('📋', 'M3U8', `Captured manifest for videoId=${videoId}`);
-                } catch (e) {
-                    // Silently ignore errors from destroyed contexts
-                }
+    page.on('response', async (res) => {
+        const url = res.url();
+        // Only process relevant requests to save performance
+        if (url.includes('video.twimg.com') && url.includes('.m3u8')) {
+            const m = url.match(/ext_tw_video\/(\d+)\//);
+            const videoId = m ? m[1] : 'unknown';
+            try {
+                const body = await res.text();
+                if (!m3u8Bodies.has(videoId)) m3u8Bodies.set(videoId, []);
+                m3u8Bodies.get(videoId).push({ url, body });
+                
+                // Push to buffer instead of logging immediately
+                m3u8Logs.push({ icon: '📋', tag: 'M3U8', msg: `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}` });
+            } catch (e) {
+                m3u8Logs.push({ icon: '⚠️', tag: 'M3U8', msg: `Could not read body for ${url}: ${e.message}` });
             }
-        });
-    };
-    collectM3u8(); // arm before page loads
+        }
+    });
 
     page.on('response',      ()    => { reqTotal++; });
     page.on('requestfailed', (req) => {
@@ -250,6 +251,13 @@ async function getLatestTweet(username) {
 
         log('🏆', 'SELECTED', `time=${best.time} | video=${best.hasVideo} | videoId=${best.videoId || 'none'} | images=${best.images.length}`);
         ghaEndGroup();
+
+        // ── FLUSH BACKGROUND LOGS HERE ────────────────────────────────────────
+        if (m3u8Logs.length > 0) {
+            ghaGroup('📡 Network: M3U8 Manifests');
+            m3u8Logs.forEach(l => log(l.icon, l.tag, l.msg));
+            ghaEndGroup();
+        }
 
         // ── Video download ────────────────────────────────────────────────────
         const isPickupSummon = best.text.toLowerCase().includes('pickup summon') || best.text.toLowerCase().includes('servant tactics');
