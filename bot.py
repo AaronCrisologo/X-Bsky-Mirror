@@ -51,7 +51,7 @@ SCHEDULED_TIMES = [
     datetime.time(hour=22, minute=10)
 ]
 
-FETCH_TIMEOUT = 60  # Max seconds to wait for scraper (just in case)
+FETCH_TIMEOUT = 90  # Max seconds to wait for scraper (just in case)
 
 def get_latest_tweet_data():
     gha_group("🕷️  Twitter/X Scraper")

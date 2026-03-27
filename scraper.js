@@ -233,6 +233,10 @@ async function getLatestTweet(username) {
             return unique;
         });
 
+        // Wait for m3u8 manifests triggered during scrolling to arrive
+        log('⏳', 'SCRAPE', 'Waiting for m3u8 manifests to settle (2s)...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
         log('📋', 'SCRAPE', `${scrapeResult.length} unique article(s) found in ${scrapeTimer()}`);
         scrapeResult.forEach((t, i) => {
             log(`  [${i}]`, 'ARTICLE',
