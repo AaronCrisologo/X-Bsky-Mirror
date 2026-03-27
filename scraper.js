@@ -199,6 +199,20 @@ async function getLatestTweet(username) {
                     article.querySelectorAll('[data-testid="tweetPhoto"] img').forEach(img => {
                         if (img.src) imageSet.add(img.src);
                     });
+
+                    // For video posts with no tweetPhoto images, grab the video poster/thumbnail.
+                    // Twitter puts the thumbnail as the <video poster="..."> attribute or as
+                    // a preview image inside the video player container.
+                    if (imageSet.size === 0 && hasVideo) {
+                        const videoEl = article.querySelector('video');
+                        if (videoEl?.poster) {
+                            imageSet.add(videoEl.poster);
+                        } else {
+                            // Try player preview images
+                            const playerImgs = article.querySelectorAll('[data-testid="videoPlayer"] img, [data-testid="previewInterstitial"] img');
+                            playerImgs.forEach(img => { if (img.src) imageSet.add(img.src); });
+                        }
+                    }
                     
                     results.push({
                         text:     tweetText,
@@ -494,13 +508,11 @@ async function getLatestTweet(username) {
         ghaEndGroup();
 
         console.log(JSON.stringify(best));
-        process.exit(0); // exit immediately — no need to wait for pending async operations
 
     } catch (error) {
         ghaError(`Unhandled exception: ${error.message}`);
         log('💥', 'FATAL', error.stack || error.message);
         console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
-        process.exit(1);
     } finally {
         await browser.close();
         log('🛑', 'DONE', `Browser closed — total: ${totalTimer()}`);
