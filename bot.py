@@ -63,13 +63,9 @@ def get_latest_tweet_data():
 
         log("🚀", "SCRAPER", "Spawning node scraper.js...")
 
-        # Use Popen so stderr streams in real time — subprocess.run buffers it all
-        # and discards it on TimeoutExpired, leaving us with no logs to debug
-        import threading
         proc = subprocess.Popen(
             ['node', 'scraper.js'],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             env=my_env,
         )
 
@@ -88,7 +84,6 @@ def get_latest_tweet_data():
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-            stderr_thread.join(timeout=2)
             gha_error(f"Scraper timed out after {FETCH_TIMEOUT}s — see logs above for last known state")
             gha_end_group()
             return None
