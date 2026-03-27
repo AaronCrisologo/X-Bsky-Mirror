@@ -69,30 +69,20 @@ def get_latest_tweet_data():
             env=my_env,
         )
 
-        stderr_lines = []
-        def stream_stderr():
-            for line in proc.stderr:
-                text = line.decode('utf-8', errors='ignore')
-                print(text, end='', flush=True)
-                stderr_lines.append(text)
-
-        stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
-        stderr_thread.start()
-
         try:
+            # communicate() will now only capture stdout, leaving stderr alone
             stdout_bytes, _ = proc.communicate(timeout=FETCH_TIMEOUT)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-            gha_error(f"Scraper timed out after {FETCH_TIMEOUT}s — see logs above for last known state")
+            gha_error(f"Scraper timed out after {FETCH_TIMEOUT}s")
             gha_end_group()
             return None
 
-        stderr_thread.join(timeout=2)
         log("⏱️", "SCRAPER", f"Process exited (code {proc.returncode}) in {t.elapsed()}")
 
         if not stdout_bytes:
-            gha_error("Scraper produced no stdout — check stderr above")
+            gha_error("Scraper produced no stdout — check logs above")
             gha_end_group()
             return None
 
@@ -118,21 +108,11 @@ def get_latest_tweet_data():
         gha_end_group()
         return data
 
-    except subprocess.TimeoutExpired:
-        # Should not reach here — handled inside Popen block above
-        gha_error(f"Scraper timed out after {FETCH_TIMEOUT}s")
-        gha_end_group()
-        return None
-    except UnicodeDecodeError as e:
-        gha_error(f"Encoding error decoding scraper output: {e}")
-        gha_end_group()
-        return None
     except Exception as e:
         gha_error(f"Unexpected error running scraper: {e}")
         import traceback; traceback.print_exc()
         gha_end_group()
         return None
-
 
 # === Bluesky: Check if already posted ===
 def is_already_posted(client, new_text):
