@@ -142,8 +142,17 @@ async function getLatestTweet(username) {
         await page.setViewport({ width: 1280, height: 1000 });
 
         const navTimer = timer();
-        await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
-        log('✅', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
+        await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2', timeout: 30000 });
+        const finalUrl = page.url();
+        log('✅', 'NAV', `Settled at ${finalUrl} in ${navTimer()}`);
+
+        // Detect login redirect — cookies may have expired
+        if (finalUrl.includes('/login') || finalUrl.includes('twitter.com/login') || finalUrl.includes('x.com/i/flow')) {
+            ghaError(`Redirected to login page: ${finalUrl} — auth cookies may have expired`);
+            console.error('{"error": "auth_redirect"}');
+            await browser.close();
+            process.exit(1);
+        }
 
         const selectorTimer = timer();
         await page.waitForSelector('article', { timeout: 30000 });
