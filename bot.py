@@ -63,27 +63,45 @@ def get_latest_tweet_data():
 
         log("🚀", "SCRAPER", "Spawning node scraper.js...")
 
-        result = subprocess.run(
+        # Use Popen so stderr streams in real time — subprocess.run buffers it all
+        # and discards it on TimeoutExpired, leaving us with no logs to debug
+        import threading
+        proc = subprocess.Popen(
             ['node', 'scraper.js'],
-            capture_output=True,
-            text=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=my_env,
-            timeout=FETCH_TIMEOUT
         )
 
-        log("⏱️", "SCRAPER", f"Process exited (code {result.returncode}) in {t.elapsed()}")
+        stderr_lines = []
+        def stream_stderr():
+            for line in proc.stderr:
+                text = line.decode('utf-8', errors='ignore')
+                print(text, end='', flush=True)
+                stderr_lines.append(text)
 
-        if result.stderr:
-            stderr_text = result.stderr.decode('utf-8', errors='ignore')
-            # scraper.js writes its own ::group:: blocks — emit verbatim so GHA renders them
-            print(stderr_text, flush=True)
+        stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
+        stderr_thread.start()
 
-        if not result.stdout:
+        try:
+            stdout_bytes, _ = proc.communicate(timeout=FETCH_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            stderr_thread.join(timeout=2)
+            gha_error(f"Scraper timed out after {FETCH_TIMEOUT}s — see logs above for last known state")
+            gha_end_group()
+            return None
+
+        stderr_thread.join(timeout=2)
+        log("⏱️", "SCRAPER", f"Process exited (code {proc.returncode}) in {t.elapsed()}")
+
+        if not stdout_bytes:
             gha_error("Scraper produced no stdout — check stderr above")
             gha_end_group()
             return None
 
-        raw = result.stdout.decode('utf-8', errors='strict').strip()
+        raw = stdout_bytes.decode('utf-8', errors='strict').strip()
         log("📤", "SCRAPER", f"stdout: {len(raw)} chars")
 
         json_line = next((l for l in reversed(raw.splitlines()) if '{' in l), None)
@@ -106,6 +124,7 @@ def get_latest_tweet_data():
         return data
 
     except subprocess.TimeoutExpired:
+        # Should not reach here — handled inside Popen block above
         gha_error(f"Scraper timed out after {FETCH_TIMEOUT}s")
         gha_end_group()
         return None
