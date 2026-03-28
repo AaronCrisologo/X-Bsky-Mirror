@@ -233,6 +233,10 @@ async function getLatestTweet(username) {
             return unique;
         });
 
+        // Wait for m3u8 manifests triggered during scrolling to arrive
+        log('⏳', 'SCRAPE', 'Waiting for m3u8 manifests to settle (2s)...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
         log('📋', 'SCRAPE', `${scrapeResult.length} unique article(s) found in ${scrapeTimer()}`);
         scrapeResult.forEach((t, i) => {
             log(`  [${i}]`, 'ARTICLE',
@@ -260,10 +264,9 @@ async function getLatestTweet(username) {
         }
 
         // ── Video download ────────────────────────────────────────────────────
-        const isPickupSummon = best.text.toLowerCase().includes('pickup summon') || best.text.toLowerCase().includes('servant tactics');
-        log('ℹ️', 'VIDEO', `isPickupSummon=${isPickupSummon} | hasVideo=${best.hasVideo}`);
+        log('ℹ️', 'VIDEO', `hasVideo=${best.hasVideo}`);
 
-        if (best.hasVideo && isPickupSummon) {
+        if (best.hasVideo) {
             ghaGroup('🎬 Video Download');
             const videoTimer = timer();
 
@@ -333,6 +336,17 @@ async function getLatestTweet(username) {
                             }));
 
                             log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
+
+                            // Compute total video duration from #EXTINF tags
+                            const totalDuration = (childBody || '').split('\n')
+                                .map(l => l.trim())
+                                .filter(l => l.startsWith('#EXTINF:'))
+                                .reduce((sum, l) => sum + parseFloat(l.replace('#EXTINF:', '').replace(',', '')), 0);
+                            log('⏱️', 'VIDEO', `Video duration: ${totalDuration.toFixed(2)}s`);
+
+                            if (totalDuration <= 10) {
+                                log('ℹ️', 'VIDEO', `Duration ≤10s — skipping video download, thumbnail will be used instead`);
+                            } else {
 
                             // The real video file URL is in #EXT-X-MAP:URI
                             let videoUrl = null;
@@ -459,6 +473,7 @@ async function getLatestTweet(username) {
                                         try { fs.unlinkSync(f); } catch {}
                                     }
                                 }
+                            } // end duration > 10 else block
                             }
                         } catch (e) {
                             ghaError(`Child playlist / video download threw: ${e.message}`);
