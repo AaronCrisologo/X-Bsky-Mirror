@@ -117,8 +117,8 @@ def get_latest_tweet_data():
 # === Bluesky: Check if already posted ===
 def is_already_posted(client, new_text):
     try:
-        log("🔍", "DEDUP", "Checking last 5 posts in Bluesky feed...")
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=5, filter='posts_no_replies')
+        log("🔍", "DEDUP", "Checking last 2 posts in Bluesky feed...")
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=2, filter='posts_no_replies')
         
         new_text_clean = new_text.strip().lower()
         log("  →", "DEDUP", f"Checking against: {new_text_clean[:100]}...")

@@ -535,8 +535,18 @@ async function getLatestTweet(username) {
         log('💥', 'FATAL', error.stack || error.message);
         console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
     } finally {
-        await browser.close();
+        // Race browser.close against a short deadline so the process always exits cleanly.
+        try {
+            await Promise.race([
+                browser.close(),
+                new Promise(resolve => setTimeout(resolve, 6000))
+            ]);
+        } catch (e) {
+            log('⚠️', 'BROWSER', `Error during close: ${e.message}`);
+        }
         log('🛑', 'DONE', `Browser closed — total: ${totalTimer()}`);
+        // Force-exit in case lingering async response listeners are keeping the event loop alive after the browser is gone.
+        process.exit(0);
     }
 }
 
