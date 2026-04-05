@@ -130,8 +130,8 @@ def is_already_posted(client, new_text):
                 log("⚠️", "DEDUP", "Exact match found — skipping")
                 return True
             
-            if len(new_text_clean) > 50 and new_text_clean[:100] == existing_text[:100]:
-                log("⚠️", "DEDUP", "Partial match (first 100 chars) found — skipping")
+            if len(new_text_clean) > 50 and new_text_clean[:200] == existing_text[:200]:
+                log("⚠️", "DEDUP", "Partial match (first 200 chars) found — skipping")
                 return True
         
         log("✅", "DEDUP", "No duplicate found")
