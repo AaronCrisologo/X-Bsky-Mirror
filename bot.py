@@ -136,17 +136,20 @@ def is_already_posted(client, new_text):
         response = client.get_author_feed(actor=BSKY_HANDLE, limit=2, filter='posts_no_replies')
         
         new_text_clean = _normalize_for_dedup(new_text.strip().lower())
-        log("  →", "DEDUP", f"Checking against: {new_text_clean[:100]}...")
+        log("  →", "DEDUP", f"New (normalized):      {new_text_clean[:100]}")
 
-        for view in response.feed:
-            existing_text = _normalize_for_dedup(view.post.record.text.strip().lower())
+        for i, view in enumerate(response.feed, 1):
+            existing_raw = view.post.record.text.strip().lower()
+            existing_text = _normalize_for_dedup(existing_raw)
+            log("  →", "DEDUP", f"Existing #{i} (raw):     {existing_raw[:100]}")
+            log("  →", "DEDUP", f"Existing #{i} (normalized): {existing_text[:100]}")
             
             if existing_text == new_text_clean:
-                log("⚠️", "DEDUP", "Exact match found — skipping")
+                log("⚠️", "DEDUP", f"Exact match found on post #{i} — skipping")
                 return True
             
             if len(new_text_clean) > 50 and new_text_clean[:100] == existing_text[:100]:
-                log("⚠️", "DEDUP", "Partial match (first 100 chars) found — skipping")
+                log("⚠️", "DEDUP", f"Partial match (first 100 chars) on post #{i} — skipping")
                 return True
         
         log("✅", "DEDUP", "No duplicate found")
