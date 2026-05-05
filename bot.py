@@ -118,9 +118,14 @@ def get_latest_tweet_data():
 
 # === Bluesky: Check if already posted ===
 def _normalize_for_dedup(text):
-    """Normalize text for dedup comparison by removing truncated URLs and extra whitespace."""
-    # Remove truncated URLs (e.g. "fate-go.us/news/?ca..." or "https://example.com/foo...")
-    text = re.sub(r'\S+\.\.\.', '', text)
+    """Normalize text for dedup comparison by removing all URLs and truncation artifacts."""
+    # Remove all URLs (http, https, www, and bare domains like fate-go.us/...)
+    # Handles full URLs, truncated URLs with ... or …, and bare domain paths
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    text = re.sub(r'\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}\S*', '', text)
+    # Remove standalone ellipsis characters (both … and ...)
+    text = re.sub(r'…|\.{3}', '', text)
     # Collapse whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     return text
