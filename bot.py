@@ -117,16 +117,24 @@ def get_latest_tweet_data():
         return None
 
 # === Bluesky: Check if already posted ===
+def _normalize_for_dedup(text):
+    """Normalize text for dedup comparison by removing truncated URLs and extra whitespace."""
+    # Remove truncated URLs (e.g. "fate-go.us/news/?ca..." or "https://example.com/foo...")
+    text = re.sub(r'\S+\.\.\.', '', text)
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 def is_already_posted(client, new_text):
     try:
         log("🔍", "DEDUP", "Checking last 2 posts in Bluesky feed...")
         response = client.get_author_feed(actor=BSKY_HANDLE, limit=2, filter='posts_no_replies')
         
-        new_text_clean = new_text.strip().lower()
+        new_text_clean = _normalize_for_dedup(new_text.strip().lower())
         log("  →", "DEDUP", f"Checking against: {new_text_clean[:100]}...")
 
         for view in response.feed:
-            existing_text = view.post.record.text.strip().lower()
+            existing_text = _normalize_for_dedup(view.post.record.text.strip().lower())
             
             if existing_text == new_text_clean:
                 log("⚠️", "DEDUP", "Exact match found — skipping")
