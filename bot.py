@@ -2,11 +2,13 @@ from fallbacks import get_fallback_data
 
 import time
 import datetime
-from atproto import Client, client_utils
+from atproto import Client, client_utils, models
 import subprocess
 import json
 import os
 import re
+import urllib.request
+from html.parser import HTMLParser
 from PIL import Image
 
 # ─── GitHub Actions logging helpers ───────────────────────────────────────────
@@ -115,23 +117,39 @@ def get_latest_tweet_data():
         return None
 
 # === Bluesky: Check if already posted ===
+def _normalize_for_dedup(text):
+    """Normalize text for dedup comparison by removing all URLs and truncation artifacts."""
+    # Remove all URLs (http, https, www, and bare domains like fate-go.us/...)
+    # Handles full URLs, truncated URLs with ... or …, and bare domain paths
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    text = re.sub(r'\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}\S*', '', text)
+    # Remove standalone ellipsis characters (both … and ...)
+    text = re.sub(r'…|\.{3}', '', text)
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 def is_already_posted(client, new_text):
     try:
         log("🔍", "DEDUP", "Checking last 2 posts in Bluesky feed...")
         response = client.get_author_feed(actor=BSKY_HANDLE, limit=2, filter='posts_no_replies')
         
-        new_text_clean = new_text.strip().lower()
-        log("  →", "DEDUP", f"Checking against: {new_text_clean[:100]}...")
+        new_text_clean = _normalize_for_dedup(new_text.strip().lower())
+        log("  →", "DEDUP", f"New (normalized):      {new_text_clean[:100]}")
 
-        for view in response.feed:
-            existing_text = view.post.record.text.strip().lower()
+        for i, view in enumerate(response.feed, 1):
+            existing_raw = view.post.record.text.strip().lower()
+            existing_text = _normalize_for_dedup(existing_raw)
+            log("  →", "DEDUP", f"Existing #{i} (raw):     {existing_raw[:100]}")
+            log("  →", "DEDUP", f"Existing #{i} (normalized): {existing_text[:100]}")
             
             if existing_text == new_text_clean:
-                log("⚠️", "DEDUP", "Exact match found — skipping")
+                log("⚠️", "DEDUP", f"Exact match found on post #{i} — skipping")
                 return True
             
             if len(new_text_clean) > 50 and new_text_clean[:100] == existing_text[:100]:
-                log("⚠️", "DEDUP", "Partial match (first 100 chars) found — skipping")
+                log("⚠️", "DEDUP", f"Partial match (first 100 chars) on post #{i} — skipping")
                 return True
         
         log("✅", "DEDUP", "No duplicate found")
@@ -139,6 +157,57 @@ def is_already_posted(client, new_text):
     except Exception as e:
         gha_warning(f"DEDUP: could not check Bluesky feed: {e}")
     return False
+
+
+# === Link card / embed helpers ===
+
+def fetch_og(url):
+    """Fetch OpenGraph metadata from a URL. Returns a dict or None."""
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            html = r.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        log('⚠️', 'OG', f"Could not fetch {url}: {e}")
+        return None
+
+    og = {}
+
+    class OGParser(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == 'meta':
+                d = dict(attrs)
+                prop = d.get('property', d.get('name', ''))
+                if prop in ('og:title', 'og:description', 'og:image', 'og:url'):
+                    og[prop] = d.get('content', '')
+
+    OGParser().feed(html)
+    return og if og.get('og:title') else None
+
+
+def build_link_card(client, url, og):
+    """Upload the OG thumbnail (if any) and return an AppBskyEmbedExternal embed."""
+    thumb_blob = None
+    og_image = og.get('og:image', '')
+    if og_image:
+        try:
+            req = urllib.request.Request(og_image, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                img_bytes = r.read()
+            upload = client.upload_blob(img_bytes)
+            thumb_blob = upload.blob
+            log('✅', 'OG', f"Thumbnail uploaded ({len(img_bytes) // 1024} KB)")
+        except Exception as e:
+            log('⚠️', 'OG', f"Thumbnail upload failed: {e}")
+
+    return models.AppBskyEmbedExternal.Main(
+        external=models.AppBskyEmbedExternal.External(
+            uri=og.get('og:url') or url,
+            title=og.get('og:title', ''),
+            description=og.get('og:description', ''),
+            thumb=thumb_blob,
+        )
+    )
 
 
 # === CONFIGURATION ===
@@ -358,8 +427,27 @@ def main():
                         image_aspect_ratios=aspect_ratios
                     )
                 else:
-                    log("📤", "MAIN", "Posting text-only to Bluesky")
-                    client.send_post(post_text_with_facets)
+                    # Text-only post — try to attach a link card for the first URL
+                    link_embed = None
+                    url_match = re.search(r'https?://\S+|www\.\S+', display_text)
+                    if url_match:
+                        first_url = url_match.group()
+                        if not first_url.startswith('http'):
+                            first_url = f'https://{first_url}'
+                        # Strip trailing punctuation that crept in
+                        first_url = first_url.rstrip('.,!?)')
+                        log('🔗', 'MAIN', f"Text-only post — fetching OG data for {first_url}")
+                        og = fetch_og(first_url)
+                        if og:
+                            log('✅', 'MAIN', f"OG found: {og.get('og:title', '')[:60]}")
+                            link_embed = build_link_card(client, first_url, og)
+                        else:
+                            log('⚠️', 'MAIN', "No OG data found — posting without embed")
+                    else:
+                        log('ℹ️', 'MAIN', "No URL in text — posting without embed")
+
+                    log('📤', 'MAIN', f"Posting text-only to Bluesky{'  (with link card)' if link_embed else ''}")
+                    client.send_post(text=post_text_with_facets, embed=link_embed)
                 
                 log("✅", "MAIN", "Posted successfully!")
                 gha_notice("New post published to Bluesky")
