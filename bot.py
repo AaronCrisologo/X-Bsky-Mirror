@@ -275,9 +275,15 @@ def main():
     
     while "\n\n\n" in post_text:
         post_text = post_text.replace("\n\n\n", "\n\n")
-    
+
+    # Skip if the tweet is just a bare "More info ➡️" link card with no real content
+    if re.match(r'^More info\s*➡️?\s*(https?://)?\S+$', post_text):
+        log("ℹ️", "MAIN", f"Post text is just a bare link ('{post_text[:60]}…') — skipping")
+        gha_end_group()
+        return
+
     log("📝", "MAIN", f"Post text ({len(post_text)} chars): {post_text[:150]}...")
-    
+
     has_new_content = (
         tweet_data and
         post_text and
