@@ -276,8 +276,19 @@ def main():
     while "\n\n\n" in post_text:
         post_text = post_text.replace("\n\n\n", "\n\n")
 
-    # Skip if the tweet is just a bare "More info ➡️" link card with no real content
-    if re.match(r'^More info\s*➡️?\s*(https?://)?\S+$', post_text):
+    # Skip if the tweet is just a bare "More info" link card with no real content.
+    # Must have at least one component after "More info" (arrow, URL, parenthetical, hashtag).
+    # Bare "More info" alone is NOT filtered (it may be a real post). Case-insensitive.
+    if re.match(
+        r'^More info\s+(?:'
+        + r'(?:➡️|›|→)\s*'
+        + r'|\([^)]*\)\s*'
+        + r'|(?:(?:https?://)?(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}\S*)\s*'
+        + r'|#\w+\s*'
+        + r')+$',
+        post_text,
+        re.IGNORECASE
+    ):
         log("ℹ️", "MAIN", f"Post text is just a bare link ('{post_text[:60]}…') — skipping")
         gha_end_group()
         return
