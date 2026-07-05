@@ -122,12 +122,6 @@ def compress_image_if_needed(image_bytes: bytes, max_size: int = MAX_BLOB_SIZE) 
 BSKY_HANDLE = os.getenv("BSKY_USER")
 BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
 
-# Scheduled check times in UTC (5:15 AM and 10:10 PM)
-SCHEDULED_TIMES = [
-    datetime.time(hour=5, minute=15),
-    datetime.time(hour=22, minute=10)
-]
-
 FETCH_TIMEOUT = 90  # Max seconds to wait for scraper (just in case)
 
 def get_latest_tweet_data():
@@ -269,7 +263,6 @@ def build_link_card(client, url, og):
             req = urllib.request.Request(og_image, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=8) as r:
                 img_bytes = r.read()
-            # Compress if over Bluesky's blob size limit
             img_bytes = compress_image_if_needed(img_bytes)
             upload = client.upload_blob(img_bytes)
             thumb_blob = upload.blob
@@ -427,7 +420,6 @@ def main():
                         aspect_ratios.append({"width": w, "height": h})
                     with open(filename, 'rb') as f:
                         img_bytes = f.read()
-                    # Compress if over Bluesky's blob size limit
                     img_bytes = compress_image_if_needed(img_bytes)
                     images_to_upload.append(img_bytes)
 
@@ -443,7 +435,6 @@ def main():
                         aspect_ratios = [{"width": w, "height": h}]
                     with open(chosen_fallback, 'rb') as f:
                         img_bytes = f.read()
-                    # Compress if over Bluesky's blob size limit
                     img_bytes = compress_image_if_needed(img_bytes)
                     images_to_upload = [img_bytes]
                     log("[OK]", "MAIN", f"Fallback image loaded: {chosen_fallback}")
