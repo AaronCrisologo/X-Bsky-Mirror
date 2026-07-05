@@ -18,7 +18,7 @@ def ts():
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
 def log(icon, tag, msg):
-    print(f"[{ts()}] {icon} [{tag}] {msg}", flush=True)
+    print(f"[{ts()}] [{icon}] [{tag}] {msg}", flush=True)
 
 def gha_group(name):
     print(f"::group::{name}", flush=True)
@@ -84,7 +84,7 @@ def compress_image_if_needed(image_bytes: bytes, max_size: int = MAX_BLOB_SIZE) 
         compressed = buffer.getvalue()
 
         if len(compressed) <= max_size:
-            log('🗜️', 'COMPRESS', f"Compressed image from {len(image_bytes) // 1024} KB to {len(compressed) // 1024} KB (quality={quality})")
+            log("[COMPRESS]", "COMPRESS", f"Compressed image from {len(image_bytes) // 1024} KB to {len(compressed) // 1024} KB (quality={quality})")
             return compressed
 
         # Reduce quality for next iteration
@@ -96,7 +96,7 @@ def compress_image_if_needed(image_bytes: bytes, max_size: int = MAX_BLOB_SIZE) 
             quality -= 2
 
     # If we still can't get under the limit, resize the image
-    log('⚠️', 'COMPRESS', f"Quality reduction insufficient, resizing image...")
+    log("[WARN]", "COMPRESS", f"Quality reduction insufficient, resizing image...")
     scale = 0.9
     while scale > 0.1:
         new_size = (int(img.width * scale), int(img.height * scale))
@@ -106,7 +106,7 @@ def compress_image_if_needed(image_bytes: bytes, max_size: int = MAX_BLOB_SIZE) 
         compressed = buffer.getvalue()
 
         if len(compressed) <= max_size:
-            log('🗜️', 'COMPRESS', f"Resized image from {img.width}x{img.height} to {new_size[0]}x{new_size[1]} ({len(compressed) // 1024} KB)")
+            log("[COMPRESS]", "COMPRESS", f"Resized image from {img.width}x{img.height} to {new_size[0]}x{new_size[1]} ({len(compressed) // 1024} KB)")
             return compressed
         scale -= 0.1
 
@@ -114,7 +114,7 @@ def compress_image_if_needed(image_bytes: bytes, max_size: int = MAX_BLOB_SIZE) 
     buffer = io.BytesIO()
     img.save(buffer, format='JPEG', quality=10, optimize=True)
     compressed = buffer.getvalue()
-    log('⚠️', 'COMPRESS', f"Could not get under {max_size // 1024}KB limit, returning heavily compressed ({len(compressed) // 1024} KB)")
+    log("[WARN]", "COMPRESS", f"Could not get under {max_size // 1024}KB limit, returning heavily compressed ({len(compressed) // 1024} KB)")
     return compressed
 
 
@@ -131,14 +131,14 @@ SCHEDULED_TIMES = [
 FETCH_TIMEOUT = 90  # Max seconds to wait for scraper (just in case)
 
 def get_latest_tweet_data():
-    gha_group("🕷️  Twitter/X Scraper")
+    gha_group("[SCRAPER] Twitter/X Scraper")
     t = make_timer()
     try:
         my_env = os.environ.copy()
         my_env["PYTHONIOENCODING"] = "utf-8"
         my_env["PYTHONUTF8"] = "1"
 
-        log("🚀", "SCRAPER", "Spawning node scraper.js...")
+        log("[START]", "SCRAPER", "Spawning node scraper.js...")
 
         proc = subprocess.Popen(
             ['node', 'scraper.js'],
@@ -156,7 +156,7 @@ def get_latest_tweet_data():
             gha_end_group()
             return None
 
-        log("⏱️", "SCRAPER", f"Process exited (code {proc.returncode}) in {t.elapsed()}")
+        log("[TIME]", "SCRAPER", f"Process exited (code {proc.returncode}) in {t.elapsed()}")
 
         if not stdout_bytes:
             gha_error("Scraper produced no stdout — check logs above")
@@ -164,7 +164,7 @@ def get_latest_tweet_data():
             return None
 
         raw = stdout_bytes.decode('utf-8', errors='strict').strip()
-        log("📤", "SCRAPER", f"stdout: {len(raw)} chars")
+        log("[SEND]", "SCRAPER", f"stdout: {len(raw)} chars")
 
         json_line = next((l for l in reversed(raw.splitlines()) if '{' in l), None)
         if not json_line:
@@ -178,7 +178,7 @@ def get_latest_tweet_data():
             gha_end_group()
             return None
 
-        log("✅", "SCRAPER",
+        log("[OK]", "SCRAPER",
             f"text_len={len(data.get('text',''))} | images={len(data.get('images',[]))} | "
             f"hasVideo={data.get('hasVideo',False)} | videoPath={data.get('videoPath','(none)')} | "
             f"time={data.get('time','?')}")
@@ -207,7 +207,7 @@ def _normalize_for_dedup(text):
 
 def is_already_posted(client, new_text):
     try:
-        log("🔍", "DEDUP", "Checking last 2 posts in Bluesky feed...")
+        log("[CHECK]", "DEDUP", "Checking last 2 posts in Bluesky feed...")
         response = client.get_author_feed(actor=BSKY_HANDLE, limit=2, filter='posts_no_replies')
         
         new_text_clean = _normalize_for_dedup(new_text.strip().lower())
@@ -220,14 +220,14 @@ def is_already_posted(client, new_text):
             log("  →", "DEDUP", f"Existing #{i} (normalized): {existing_text[:100]}")
             
             if existing_text == new_text_clean:
-                log("⚠️", "DEDUP", f"Exact match found on post #{i} — skipping")
+                log("[WARN]", "DEDUP", f"Exact match found on post #{i} — skipping")
                 return True
             
             if len(new_text_clean) > 50 and new_text_clean[:100] == existing_text[:100]:
-                log("⚠️", "DEDUP", f"Partial match (first 100 chars) on post #{i} — skipping")
+                log("[WARN]", "DEDUP", f"Partial match (first 100 chars) on post #{i} — skipping")
                 return True
         
-        log("✅", "DEDUP", "No duplicate found")
+        log("[OK]", "DEDUP", "No duplicate found")
 
     except Exception as e:
         gha_warning(f"DEDUP: could not check Bluesky feed: {e}")
@@ -243,7 +243,7 @@ def fetch_og(url):
         with urllib.request.urlopen(req, timeout=8) as r:
             html = r.read().decode('utf-8', errors='ignore')
     except Exception as e:
-        log('⚠️', 'OG', f"Could not fetch {url}: {e}")
+        log("[WARN]", "OG", f"Could not fetch {url}: {e}")
         return None
 
     og = {}
@@ -273,9 +273,9 @@ def build_link_card(client, url, og):
             img_bytes = compress_image_if_needed(img_bytes)
             upload = client.upload_blob(img_bytes)
             thumb_blob = upload.blob
-            log('✅', 'OG', f"Thumbnail uploaded ({len(img_bytes) // 1024} KB)")
+            log("[OK]", "OG", f"Thumbnail uploaded ({len(img_bytes) // 1024} KB)")
         except Exception as e:
-            log('⚠️', 'OG', f"Thumbnail upload failed: {e}")
+            log("[WARN]", "OG", f"Thumbnail upload failed: {e}")
 
     return models.AppBskyEmbedExternal.Main(
         external=models.AppBskyEmbedExternal.External(
@@ -302,8 +302,8 @@ def main():
         return
 
     if SIMULATION_MODE:
-        gha_group("🧪 Simulation Mode")
-        log("ℹ️", "MAIN", "Running in SIMULATION MODE")
+        gha_group("[SIM] Simulation Mode")
+        log("[INFO]", "MAIN", "Running in SIMULATION MODE")
         
         tweet_data = {
             'text': """This is a test:
@@ -312,15 +312,15 @@ def main():
             fate-go.us/news/?category=NEWS&article=%2Fiframe%2F2026%2F0204_sf_pu2%2F
             youtu.be/uAB02z1coVI
             https://anime.fate-go.us/lostfujimaru/
-            ➡️
+            ->
 #FateGOUS""",
             'time': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'images': [],
             'hasVideo': True
         }
     else:
-        gha_group("🏭 Production Mode")
-        log("ℹ️", "MAIN", "Running in PRODUCTION MODE")
+        gha_group("[PROD] Production Mode")
+        log("[INFO]", "MAIN", "Running in PRODUCTION MODE")
         tweet_data = get_latest_tweet_data()
 
     if not tweet_data:
@@ -328,7 +328,7 @@ def main():
         gha_end_group()
         return
 
-    log("📊", "MAIN", f"Tweet data: hasVideo={tweet_data.get('hasVideo',False)} images={len(tweet_data.get('images',[]))} videoPath={tweet_data.get('videoPath','(none)')}")
+    log("[STATS]", "MAIN", f"Tweet data: hasVideo={tweet_data.get('hasVideo',False)} images={len(tweet_data.get('images',[]))} videoPath={tweet_data.get('videoPath','(none)')}")
     
     tweet_time_str = tweet_data.get('time', '')
     is_recent = False
@@ -366,11 +366,11 @@ def main():
         post_text,
         re.IGNORECASE
     ):
-        log("ℹ️", "MAIN", f"Post text is just a bare link ('{post_text[:60]}…') — skipping")
+        log("[INFO]", "MAIN", f"Post text is just a bare link ('{post_text[:60]}…') — skipping")
         gha_end_group()
         return
 
-    log("📝", "MAIN", f"Post text ({len(post_text)} chars): {post_text[:150]}...")
+    log("[NOTE]", "MAIN", f"Post text ({len(post_text)} chars): {post_text[:150]}...")
 
     has_new_content = (
         tweet_data and
@@ -381,7 +381,7 @@ def main():
     )
 
     if has_new_content:
-        log("🆕", "MAIN", "New content detected — processing post")
+        log("[NEW]", "MAIN", "New content detected — processing post")
         try:
             image_urls = tweet_data.get('images', [])
             has_video = tweet_data.get('hasVideo', False)
@@ -406,12 +406,12 @@ def main():
             video_data = None
             if video_path and os.path.exists(video_path):
                 video_size_kb = os.path.getsize(video_path) / 1024
-                log("🎬", "MAIN", f"Video file found: {video_path} ({video_size_kb:.1f} KB) — will post as video")
+                log("[VIDEO]", "MAIN", f"Video file found: {video_path} ({video_size_kb:.1f} KB) — will post as video")
                 with open(video_path, 'rb') as f:
                     video_data = f.read()
 
             is_pickup_summon = 'pickup summon' in post_text.lower() or 'servant tactics' in post_text.lower()
-            log("ℹ️", "MAIN", f"is_pickup_summon={is_pickup_summon} | has_video={has_video} | video_data={'yes' if video_data else 'no'}")
+            log("[INFO]", "MAIN", f"is_pickup_summon={is_pickup_summon} | has_video={has_video} | video_data={'yes' if video_data else 'no'}")
 
             if video_data:
                 # Pickup summon video — post as video
@@ -420,7 +420,7 @@ def main():
             elif tweet_images_on_disk:
                 # Use tweet images (including video thumbnails) for any post with images
                 # This includes both regular image posts and video posts (where the thumbnail is captured)
-                log("🖼️", "MAIN", f"Using {len(tweet_images_on_disk)} tweet image(s) (including video thumbnails if present)")
+                log("[IMG]", "MAIN", f"Using {len(tweet_images_on_disk)} tweet image(s) (including video thumbnails if present)")
                 for filename in tweet_images_on_disk:
                     with Image.open(filename) as img:
                         w, h = img.size
@@ -433,7 +433,7 @@ def main():
 
             else:
                 # No images at all from Twitter → use local fallback
-                log("🔄", "MAIN", "No tweet images available — using local fallback image")
+                log("[FALLBACK]", "MAIN", "No tweet images available — using local fallback image")
                 chosen_fallback, fallback_alt = get_fallback_data(post_text)
                 final_alt_text = fallback_alt
 
@@ -446,7 +446,7 @@ def main():
                     # Compress if over Bluesky's blob size limit
                     img_bytes = compress_image_if_needed(img_bytes)
                     images_to_upload = [img_bytes]
-                    log("✅", "MAIN", f"Fallback image loaded: {chosen_fallback}")
+                    log("[OK]", "MAIN", f"Fallback image loaded: {chosen_fallback}")
                 else:
                     gha_error(f"Fallback image not found: {chosen_fallback}")
 
@@ -505,11 +505,11 @@ def main():
                     vh = tweet_data.get('videoHeight')
                     if vw and vh:
                         video_aspect_ratio = {"width": vw, "height": vh}
-                        log("📐", "MAIN", f"Video dimensions: {vw}x{vh}")
+                        log("[DIMS]", "MAIN", f"Video dimensions: {vw}x{vh}")
                     else:
-                        log("⚠️", "MAIN", "No video dimensions in scraper output — posting without aspect ratio")
+                        log("[WARN]", "MAIN", "No video dimensions in scraper output — posting without aspect ratio")
 
-                    log("📤", "MAIN", f"Posting to Bluesky with video ({video_size_kb:.1f} KB)...")
+                    log("[SEND]", "MAIN", f"Posting to Bluesky with video ({video_size_kb:.1f} KB)...")
                     send_kwargs = dict(
                         text=post_text_with_facets,
                         video=video_data,
@@ -519,7 +519,7 @@ def main():
                         send_kwargs['video_aspect_ratio'] = video_aspect_ratio
                     client.send_video(**send_kwargs)
                 elif len(images_to_upload) >= 1:
-                    log("📤", "MAIN", f"Posting to Bluesky with {len(images_to_upload)} image(s)...")
+                    log("[SEND]", "MAIN", f"Posting to Bluesky with {len(images_to_upload)} image(s)...")
                     client.send_images(
                         text=post_text_with_facets,
                         images=images_to_upload,
@@ -536,20 +536,20 @@ def main():
                             first_url = f'https://{first_url}'
                         # Strip trailing punctuation that crept in
                         first_url = first_url.rstrip('.,!?)')
-                        log('🔗', 'MAIN', f"Text-only post — fetching OG data for {first_url}")
+                        log("[LINK]", "MAIN", f"Text-only post — fetching OG data for {first_url}")
                         og = fetch_og(first_url)
                         if og:
-                            log('✅', 'MAIN', f"OG found: {og.get('og:title', '')[:60]}")
+                            log("[OK]", "MAIN", f"OG found: {og.get('og:title', '')[:60]}")
                             link_embed = build_link_card(client, first_url, og)
                         else:
-                            log('⚠️', 'MAIN', "No OG data found — posting without embed")
+                            log("[WARN]", "MAIN", "No OG data found — posting without embed")
                     else:
-                        log('ℹ️', 'MAIN', "No URL in text — posting without embed")
+                        log("[INFO]", "MAIN", "No URL in text — posting without embed")
 
-                    log('📤', 'MAIN', f"Posting text-only to Bluesky{'  (with link card)' if link_embed else ''}")
+                    log("[SEND]", "MAIN", f"Posting text-only to Bluesky{'  (with link card)' if link_embed else ''}")
                     client.send_post(text=post_text_with_facets, embed=link_embed)
                 
-                log("✅", "MAIN", "Posted successfully!")
+                log("[OK]", "MAIN", "Posted successfully!")
                 gha_notice("New post published to Bluesky")
 
             except Exception as e:
@@ -572,14 +572,14 @@ def main():
                 cleanup_count += 1
             
             if cleanup_count > 0:
-                log("🧹", "MAIN", f"Cleaned up {cleanup_count} temporary file(s)")
+                log("[CLEANUP]", "MAIN", f"Cleaned up {cleanup_count} temporary file(s)")
 
         except Exception as e:
             gha_error(f"Bluesky processing failed: {e}")
             import traceback
             traceback.print_exc()
     else:
-        log("ℹ️", "MAIN", "No new content to post")
+        log("[INFO]", "MAIN", "No new content to post")
     gha_end_group()
 
 if __name__ == "__main__":

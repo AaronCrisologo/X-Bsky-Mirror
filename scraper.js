@@ -14,7 +14,7 @@ function ts() {
 }
 
 function log(icon, tag, msg) {
-    process.stderr.write(`[${ts()}] ${icon} [${tag}] ${msg}\n`);
+    process.stderr.write(`[${ts()}] [${icon}] [${tag}] ${msg}\n`);
 }
 
 function ghaGroup(name) {
@@ -41,7 +41,7 @@ function timer() {
 // ─── Cookie / env validation ──────────────────────────────────────────────────
 
 function validateEnv() {
-    ghaGroup('🔐 Environment Validation');
+    ghaGroup('[AUTH] Environment Validation');
     const authToken = process.env.X_AUTH_TOKEN;
     const ct0 = process.env.X_CT0;
     let valid = true;
@@ -50,14 +50,14 @@ function validateEnv() {
         ghaError('X_AUTH_TOKEN secret is missing or empty');
         valid = false;
     } else {
-        log('✅', 'ENV', `X_AUTH_TOKEN present (length: ${authToken.length})`);
+        log('[OK]', 'ENV', `X_AUTH_TOKEN present (length: ${authToken.length})`);
     }
 
     if (!ct0) {
         ghaError('X_CT0 secret is missing or empty');
         valid = false;
     } else {
-        log('✅', 'ENV', `X_CT0 present (length: ${ct0.length})`);
+        log('[OK]', 'ENV', `X_CT0 present (length: ${ct0.length})`);
     }
 
     ghaEndGroup();
@@ -76,7 +76,7 @@ const rawCookies = [
 
 async function getLatestTweet(username) {
     const totalTimer = timer();
-    log('🚀', 'START', `Scraper starting for @${username}`);
+    log('[START]', 'START', `Scraper starting for @${username}`);
 
     if (!validateEnv()) {
         ghaError('Aborting — required secrets are missing');
@@ -84,13 +84,13 @@ async function getLatestTweet(username) {
     }
 
     // ── Browser ──────────────────────────────────────────────────────────────
-    ghaGroup('🖥️  Browser Launch');
+    ghaGroup('[BROWSER] Browser Launch');
     const launchTimer = timer();
     const browser = await puppeteer.launch({
         headless: 'new',
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
     });
-    log('✅', 'BROWSER', `Launched in ${launchTimer()}`);
+    log('[OK]', 'BROWSER', `Launched in ${launchTimer()}`);
     ghaEndGroup();
 
     const page = await browser.newPage();
@@ -117,9 +117,9 @@ async function getLatestTweet(username) {
                 m3u8Bodies.get(videoId).push({ url, body });
                 
                 // Push to buffer instead of logging immediately
-                m3u8Logs.push({ icon: '📋', tag: 'M3U8', msg: `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}` });
+                m3u8Logs.push({ icon: '[MANIFEST]', tag: 'M3U8', msg: `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}` });
             } catch (e) {
-                m3u8Logs.push({ icon: '⚠️', tag: 'M3U8', msg: `Could not read body for ${url}: ${e.message}` });
+                m3u8Logs.push({ icon: '[WARN]', tag: 'M3U8', msg: `Could not read body for ${url}: ${e.message}` });
             }
         }
     });
@@ -127,30 +127,30 @@ async function getLatestTweet(username) {
     page.on('response',      ()    => { reqTotal++; });
     page.on('requestfailed', (req) => {
         reqFailed++;
-        log('🚫', 'BLOCKED', `${req.failure()?.errorText} — ${req.url().substring(0, 100)}`);
+        log('[BLOCKED]', 'BLOCKED', `${req.failure()?.errorText} — ${req.url().substring(0, 100)}`);
     });
     page.on('console', (msg) => {
-        if (msg.type() === 'error') log('🖥️', 'PAGE_ERR', msg.text());
+        if (msg.type() === 'error') log('[PAGE_ERR]', 'PAGE_ERR', msg.text());
     });
 
     try {
         // ── Page load ────────────────────────────────────────────────────────
-        ghaGroup(`🌐 Page Load — x.com/${username}`);
+        ghaGroup(`[NAV] Page Load — x.com/${username}`);
         await page.setCookie(...rawCookies);
-        log('🍪', 'COOKIES', 'auth_token + ct0 injected');
+        log('[COOKIES]', 'COOKIES', 'auth_token + ct0 injected');
         await page.setViewport({ width: 1280, height: 1000 });
 
         const navTimer = timer();
         await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
-        log('✅', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
+        log('[OK]', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
 
         const selectorTimer = timer();
         await page.waitForSelector('article', { timeout: 30000 });
-        log('✅', 'DOM', `First <article> visible in ${selectorTimer()}`);
+        log('[OK]', 'DOM', `First <article> visible in ${selectorTimer()}`);
         ghaEndGroup();
 
         // ── Scrape ───────────────────────────────────────────────────────────
-        ghaGroup('🔍 Scraping Tweets');
+        ghaGroup('[SCRAPE] Scraping Tweets');
         const scrapeTimer = timer();
 
         const scrapeResult = await page.evaluate(async () => {
@@ -234,10 +234,10 @@ async function getLatestTweet(username) {
         });
 
         // Wait for m3u8 manifests triggered during scrolling to arrive
-        log('⏳', 'SCRAPE', 'Waiting for m3u8 manifests to settle (2s)...');
+        log('[SCRAPE]', 'Waiting for m3u8 manifests to settle (2s)...');
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        log('📋', 'SCRAPE', `${scrapeResult.length} unique article(s) found in ${scrapeTimer()}`);
+        log('[SCRAPE]', 'SCRAPE', `${scrapeResult.length} unique article(s) found in ${scrapeTimer()}`);
         scrapeResult.forEach((t, i) => {
             log(`  [${i}]`, 'ARTICLE',
                 `time=${t.time} | pinned=${t.isPinned} | video=${t.hasVideo} | videoId=${t.videoId || 'none'} | ` +
@@ -253,43 +253,43 @@ async function getLatestTweet(username) {
             return;
         }
 
-        log('🏆', 'SELECTED', `time=${best.time} | video=${best.hasVideo} | videoId=${best.videoId || 'none'} | images=${best.images.length}`);
+        log('[SELECTED]', 'SELECTED', `time=${best.time} | video=${best.hasVideo} | videoId=${best.videoId || 'none'} | images=${best.images.length}`);
         ghaEndGroup();
 
         // ── FLUSH BACKGROUND LOGS HERE ────────────────────────────────────────
         if (m3u8Logs.length > 0) {
-            ghaGroup('📡 Network: M3U8 Manifests');
+            ghaGroup('[NETWORK] Network: M3U8 Manifests');
             m3u8Logs.forEach(l => log(l.icon, l.tag, l.msg));
             ghaEndGroup();
         }
 
         // ── Video download ────────────────────────────────────────────────────
-        log('ℹ️', 'VIDEO', `hasVideo=${best.hasVideo}`);
+        log('[INFO]', 'VIDEO', `hasVideo=${best.hasVideo}`);
 
         if (best.hasVideo) {
-            ghaGroup('🎬 Video Download');
+            ghaGroup('[VIDEO] Video Download');
             const videoTimer = timer();
 
             if (!best.videoId) {
                 ghaWarning('hasVideo=true but could not extract videoId from DOM — skipping video');
             } else {
-                log('ℹ️', 'VIDEO', `Looking up m3u8 for videoId=${best.videoId} (collected: ${m3u8Bodies.size})`);
+                log('[INFO]', 'VIDEO', `Looking up m3u8 for videoId=${best.videoId} (collected: ${m3u8Bodies.size})`);
                 m3u8Bodies.forEach((v, k) => log('  ·', 'VIDEO', `  cached: videoId=${k}`));
 
                 const manifests = m3u8Bodies.get(best.videoId) || [];
                 if (manifests.length === 0) {
-                    ghaWarning(`No m3u8 cached for videoId=${best.videoId} — bot.py will use image fallback`);
+                    log('[WARN]', 'VIDEO', `No m3u8 cached for videoId=${best.videoId} — bot.py will use image fallback`);
                 } else {
-                    log('📋', 'VIDEO', `Captured ${manifests.length} manifest(s) for this videoId:`);
+                    log('[MANIFEST]', 'VIDEO', `Captured ${manifests.length} manifest(s) for this videoId:`);
                     manifests.forEach((m, i) => log(`  [${i}]`, 'VIDEO', m.url));
 
                     // Master playlist contains #EXT-X-STREAM-INF; child playlists don't
                     const m3u8 = manifests.find(m => m.body.includes('#EXT-X-STREAM-INF')) || manifests[0];
-                    log('📋', 'VIDEO', `Selected: ${m3u8.url} (isMaster=${m3u8.body.includes('#EXT-X-STREAM-INF')})`);
+                    log('[MANIFEST]', 'VIDEO', `Selected: ${m3u8.url} (isMaster=${m3u8.body.includes('#EXT-X-STREAM-INF')})`);
 
                     // Parse master playlist — find highest bandwidth child playlist
                     const lines = m3u8.body.split('\n').map(l => l.trim()).filter(Boolean);
-                    log('📋', 'VIDEO', `Master playlist body:\n${m3u8.body}`);
+                    log('[MANIFEST]', 'VIDEO', `Master playlist body:\n${m3u8.body}`);
 
                     const streams = [];
                     for (let i = 0; i < lines.length; i++) {
@@ -307,27 +307,27 @@ async function getLatestTweet(username) {
                         }
                     }
 
-                    log('ℹ️', 'VIDEO', `Streams: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
+                    log('[INFO]', 'VIDEO', `Streams: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
 
                     // Child playlist URLs are signed/tokenized (hash in filename) so they
                     // don't require auth cookies — plain https.get() works fine.
                     // Use cache if Chrome already fetched it, otherwise fetch directly.
                     streams.sort((a, b) => b.bandwidth - a.bandwidth);
                     const best_stream = streams[0];
-                    log('🏆', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps → ${best_stream.url}`);
+                    log('[BEST]', 'VIDEO', `Best stream: ${best_stream.resolution} @ ${best_stream.bandwidth} bps → ${best_stream.url}`);
 
                     if (true) {
                         try {
                             const cachedChild = manifests.find(m => m.url === best_stream.url);
                             const childBody = await (cachedChild ? (
-                                log('✅', 'VIDEO', 'Child playlist found in cache'),
+                                log('[OK]', 'VIDEO', 'Child playlist found in cache'),
                                 Promise.resolve(cachedChild.body)
                             ) : new Promise((resolve, reject) => {
-                                log('⬇️', 'VIDEO', `Fetching child playlist via https: ${best_stream.url}`);
+                                log('[DOWNLOAD]', 'VIDEO', `Fetching child playlist via https: ${best_stream.url}`);
                                 const https = require('https');
                                 let data = '';
                                 const req = https.get(best_stream.url, res => {
-                                    log('📡', 'VIDEO', `Child playlist HTTP ${res.statusCode}`);
+                                    log('[NETWORK]', 'VIDEO', `Child playlist HTTP ${res.statusCode}`);
                                     res.on('data', chunk => { data += chunk; });
                                     res.on('end', () => resolve(data));
                                 });
@@ -335,17 +335,17 @@ async function getLatestTweet(username) {
                                 req.setTimeout(10000, () => { req.destroy(); reject(new Error('Child playlist fetch timed out')); });
                             }));
 
-                            log('📋', 'VIDEO', `Child playlist body:\n${childBody}`);
+                            log('[MANIFEST]', 'VIDEO', `Child playlist body:\n${childBody}`);
 
                             // Compute total video duration from #EXTINF tags
                             const totalDuration = (childBody || '').split('\n')
                                 .map(l => l.trim())
                                 .filter(l => l.startsWith('#EXTINF:'))
                                 .reduce((sum, l) => sum + parseFloat(l.replace('#EXTINF:', '').replace(',', '')), 0);
-                            log('⏱️', 'VIDEO', `Video duration: ${totalDuration.toFixed(2)}s`);
+                            log('[TIME]', 'VIDEO', `Video duration: ${totalDuration.toFixed(2)}s`);
 
                             if (totalDuration <= 10) {
-                                log('ℹ️', 'VIDEO', `Duration ≤10s — skipping video download, thumbnail will be used instead`);
+                                log('[INFO]', 'VIDEO', `Duration ≤10s — skipping video download, thumbnail will be used instead`);
                             } else {
 
                             // The real video file URL is in #EXT-X-MAP:URI
@@ -355,7 +355,7 @@ async function getLatestTweet(username) {
                                 if (mapMatch) {
                                     const uri = mapMatch[1];
                                     videoUrl = uri.startsWith('https://') ? uri : new URL(uri, best_stream.url).href;
-                                    log('✅', 'VIDEO', `Found EXT-X-MAP URI: ${videoUrl}`);
+                                    log('[OK]', 'VIDEO', `Found EXT-X-MAP URI: ${videoUrl}`);
                                     break;
                                 }
                             }
@@ -365,7 +365,7 @@ async function getLatestTweet(username) {
                             } else {
                                 const { execFile } = require('child_process');
                                 const ffmpegPath = require('ffmpeg-static');
-                                log('🎞️', 'FFMPEG', `Using binary: ${ffmpegPath}`);
+                                log('[FFMPEG]', 'FFMPEG', `Using binary: ${ffmpegPath}`);
 
                                 const fetchUrl = (url) => new Promise((resolve, reject) => {
                                     const https = require('https');
@@ -392,43 +392,43 @@ async function getLatestTweet(username) {
                                         }
                                     }
                                     const allUrls = initUrl ? [initUrl, ...segUrls] : segUrls;
-                                    log('ℹ️', label, `${allUrls.length} segment(s) to download`);
+                                    log('[INFO]', label, `${allUrls.length} segment(s) to download`);
                                     const buffers = [];
                                     for (let i = 0; i < allUrls.length; i++) {
                                         buffers.push(await fetchUrl(allUrls[i]));
-                                        if (i % 5 === 0) log('ℹ️', label, `${i + 1}/${allUrls.length} done`);
+                                        if (i % 5 === 0) log('[INFO]', label, `${i + 1}/${allUrls.length} done`);
                                     }
-                                    log('✅', label, 'All segments downloaded');
+                                    log('[OK]', label, 'All segments downloaded');
                                     return Buffer.concat(buffers);
                                 };
 
                                 const dlTimer = timer();
                                 try {
-                                    log('⬇️', 'VIDEO', 'Downloading video track...');
+                                    log('[DOWNLOAD]', 'VIDEO', 'Downloading video track...');
                                     const videoBuffer = await downloadTrack(childBody, 'VID');
                                     fs.writeFileSync('tweet_video_raw.mp4', videoBuffer);
-                                    log('✅', 'VIDEO', `Raw video: ${(videoBuffer.length / 1024).toFixed(1)} KB`);
+                                    log('[OK]', 'VIDEO', `Raw video: ${(videoBuffer.length / 1024).toFixed(1)} KB`);
 
                                     const audioGroups = [];
                                     for (const match of m3u8.body.matchAll(/GROUP-ID="audio-(\d+)",AUTOSELECT=YES,URI="([^"]+)"/g)) {
                                         audioGroups.push({ bitrate: parseInt(match[1]), uri: match[2] });
                                     }
                                     audioGroups.sort((a, b) => b.bitrate - a.bitrate);
-                                    log('ℹ️', 'AUDIO', `Audio groups: ${audioGroups.map(g => g.bitrate).join(', ')} bps`);
+                                    log('[INFO]', 'AUDIO', `Audio groups: ${audioGroups.map(g => g.bitrate).join(', ')} bps`);
 
                                     if (audioGroups.length > 0) {
                                         const audioUri = audioGroups[0].uri;
                                         const audioPlaylistUrl = audioUri.startsWith('https://') ? audioUri : `https://video.twimg.com${audioUri}`;
-                                        log('⬇️', 'AUDIO', `Playlist (${audioGroups[0].bitrate} bps): ${audioPlaylistUrl}`);
+                                        log('[DOWNLOAD]', 'AUDIO', `Playlist (${audioGroups[0].bitrate} bps): ${audioPlaylistUrl}`);
                                         const cachedAudio = manifests.find(m => m.url === audioPlaylistUrl);
                                         const audioBody = cachedAudio ? cachedAudio.body : (await fetchUrl(audioPlaylistUrl)).toString();
-                                        log('ℹ️', 'AUDIO', cachedAudio ? 'Using cached playlist' : 'Fetched playlist');
+                                        log('[INFO]', 'AUDIO', cachedAudio ? 'Using cached playlist' : 'Fetched playlist');
                                         const audioBuffer = await downloadTrack(audioBody, 'AUD');
                                         fs.writeFileSync('tweet_audio_raw.mp4', audioBuffer);
-                                        log('✅', 'AUDIO', `Raw audio: ${(audioBuffer.length / 1024).toFixed(1)} KB`);
+                                        log('[OK]', 'AUDIO', `Raw audio: ${(audioBuffer.length / 1024).toFixed(1)} KB`);
 
                                         // -fflags +genpts regenerates timestamps so ffmpeg computes real duration
-                                        log('🎞️', 'FFMPEG', 'Muxing...');
+                                        log('[FFMPEG]', 'FFMPEG', 'Muxing...');
                                         await new Promise((resolve, reject) => {
                                             execFile(ffmpegPath, [
                                                 '-y',
@@ -444,9 +444,9 @@ async function getLatestTweet(username) {
                                                 'tweet_video.mp4'
                                             ], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
                                                 // Always log ffmpeg tail so we can see duration line
-                                                log('🔬', 'FFMPEG', stderr.slice(-600));
+                                                log('[FFMPEG]', 'FFMPEG', stderr.slice(-600));
                                                 if (err) { ghaError(`ffmpeg failed: ${err.message}`); reject(err); }
-                                                else { log('✅', 'FFMPEG', 'Mux complete'); resolve(); }
+                                                else { log('[OK]', 'FFMPEG', 'Mux complete'); resolve(); }
                                             });
                                         });
                                         fs.unlinkSync('tweet_video_raw.mp4');
@@ -457,14 +457,14 @@ async function getLatestTweet(username) {
                                     }
 
                                     const finalSize = (fs.statSync('tweet_video.mp4').size / 1024).toFixed(1);
-                                    log('✅', 'VIDEO', `Saved tweet_video.mp4 — ${finalSize} KB in ${dlTimer()}`);
+                                    log('[OK]', 'VIDEO', `Saved tweet_video.mp4 — ${finalSize} KB in ${dlTimer()}`);
                                     best.videoPath = 'tweet_video.mp4';
                                     // Pass resolution so bot.py can set correct aspect ratio without ffprobe
                                     const resParts = best_stream.resolution.split('x');
                                     if (resParts.length === 2) {
                                         best.videoWidth  = parseInt(resParts[0]);
                                         best.videoHeight = parseInt(resParts[1]);
-                                        log('📐', 'VIDEO', `Resolution: ${best.videoWidth}x${best.videoHeight}`);
+                                        log('[DIMS]', 'VIDEO', `Resolution: ${best.videoWidth}x${best.videoHeight}`);
                                     }
 
                                 } catch (e) {
@@ -482,13 +482,13 @@ async function getLatestTweet(username) {
                 }
             }
 
-            log('⏱️', 'VIDEO', `Video section total: ${videoTimer()}`);
+            log('[TIME]', 'VIDEO', `Video section total: ${videoTimer()}`);
             ghaEndGroup();
         }
 
         // ── Image download ────────────────────────────────────────────────────
         if (best.images.length > 0) {
-            ghaGroup(`🖼️  Image Download (${best.images.length} image(s))`);
+            ghaGroup(`[IMG] Image Download (${best.images.length} image(s))`);
             for (let i = 0; i < best.images.length; i++) {
                 const originalUrl = best.images[i];
                 let highResUrl;
@@ -501,14 +501,14 @@ async function getLatestTweet(username) {
                     highResUrl = `${originalUrl}?format=jpg&name=orig`;
                 }
 
-                log('⬇️', `IMG[${i}]`, highResUrl);
+                log('[DOWNLOAD]', `IMG[${i}]`, highResUrl);
                 const imgTimer = timer();
                 try {
                     const response = await page.goto(highResUrl, { waitUntil: 'networkidle0', timeout: 15000 });
                     if (response && response.ok()) {
                         const buffer = await response.buffer();
                         fs.writeFileSync(`tweet_img_${i}.jpg`, buffer);
-                        log('✅', `IMG[${i}]`, `Saved tweet_img_${i}.jpg — ${(buffer.length / 1024).toFixed(1)} KB in ${imgTimer()}`);
+                        log('[OK]', `IMG[${i}]`, `Saved tweet_img_${i}.jpg — ${(buffer.length / 1024).toFixed(1)} KB in ${imgTimer()}`);
                     } else {
                         ghaError(`IMG[${i}]: HTTP ${response?.status()} — ${highResUrl}`);
                     }
@@ -520,19 +520,19 @@ async function getLatestTweet(username) {
         }
 
         // ── Summary ──────────────────────────────────────────────────────────
-        ghaGroup('📊 Run Summary');
-        log('⏱️', 'TIMING', `Total elapsed: ${totalTimer()}`);
-        log('🌐', 'NETWORK', `${reqTotal} responses, ${reqFailed} failed`);
-        log('🎥', 'VIDEO',  `videoId=${best.videoId || 'none'} | videoPath=${best.videoPath || '(none)'}`);
-        log('🖼️', 'IMAGES', `${best.images.length} image(s) in tweet`);
-        log('📝', 'TEXT',   `${best.text.length} chars | "${best.text.substring(0, 100).replace(/\n/g, ' ')}..."`);
+        ghaGroup('[SUMMARY] Run Summary');
+        log('[TIME]', 'TIMING', `Total elapsed: ${totalTimer()}`);
+        log('[NETWORK]', 'NETWORK', `${reqTotal} responses, ${reqFailed} failed`);
+        log('[VIDEO]', 'VIDEO',  `videoId=${best.videoId || 'none'} | videoPath=${best.videoPath || '(none)'}`);
+        log('[IMG]', 'IMAGES', `${best.images.length} image(s) in tweet`);
+        log('[TEXT]', 'TEXT',   `${best.text.length} chars | "${best.text.substring(0, 100).replace(/\n/g, ' ')}..."`);
         ghaEndGroup();
 
         console.log(JSON.stringify(best));
 
     } catch (error) {
         ghaError(`Unhandled exception: ${error.message}`);
-        log('💥', 'FATAL', error.stack || error.message);
+        log('[FATAL]', 'FATAL', error.stack || error.message);
         console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
     } finally {
         // Race browser.close against a short deadline so the process always exits cleanly.
@@ -542,9 +542,9 @@ async function getLatestTweet(username) {
                 new Promise(resolve => setTimeout(resolve, 6000))
             ]);
         } catch (e) {
-            log('⚠️', 'BROWSER', `Error during close: ${e.message}`);
+            log('[WARN]', 'BROWSER', `Error during close: ${e.message}`);
         }
-        log('🛑', 'DONE', `Browser closed — total: ${totalTimer()}`);
+        log('[DONE]', 'DONE', `Browser closed — total: ${totalTimer()}`);
         // Force-exit in case lingering async response listeners are keeping the event loop alive after the browser is gone.
         process.exit(0);
     }
