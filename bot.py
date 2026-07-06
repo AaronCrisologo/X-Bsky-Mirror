@@ -544,7 +544,22 @@ def main():
                 gha_notice("New post published to Bluesky")
 
             except Exception as e:
-                gha_error(f"Post failed at API level: {e}")
+                # Extract error message from atproto exceptions (details often in response, not str(e))
+                error_msg = str(e)
+                if not error_msg:
+                    # Try common attributes where HTTP libraries store error details
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            error_msg = e.response.text or e.response.content or str(e.response.status_code)
+                        except:
+                            pass
+                    elif hasattr(e, 'args') and e.args:
+                        error_msg = str(e.args[0])
+                    elif hasattr(e, 'message'):
+                        error_msg = str(e.message)
+                if not error_msg:
+                    error_msg = f"{type(e).__name__} (no message)"
+                gha_error(f"Post failed at API level: {error_msg}")
 
             # Cleanup
             cleanup_count = 0
