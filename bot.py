@@ -381,7 +381,7 @@ def main():
             
             images_to_upload = []
             aspect_ratios = []
-            final_alt_text = "Update"
+            final_alt_text = "Full tweet text posted"
 
             # ── Image priority ────────────────────────────────────────────
             # 1. Video file (highest priority for pickup summon videos)
@@ -447,7 +447,7 @@ def main():
                 while len(display_text.encode('utf-8')) > 290:
                     display_text = display_text[:-1]
                 display_text = display_text.strip() + "..."
-                final_alt_text = post_text
+                final_alt_text = "Max character limit reached, full tweet text: \n\n" + post_text
 
             # Build Rich Text with Facets
             post_text_with_facets = client_utils.TextBuilder()
