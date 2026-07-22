@@ -195,7 +195,7 @@ function muxVideo(videoPath, audioPath, outputPath) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-async function getLatestTweets(username, maxTweets = 5) {
+async function getLatestTweets(username, maxTweets = 8) {
     const totalTimer = timer();
     log('[START]', 'START', `Scraper starting for @${username} (max ${maxTweets} tweets)`);
 
