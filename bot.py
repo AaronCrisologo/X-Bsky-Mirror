@@ -203,8 +203,8 @@ def _normalize_for_dedup(text):
 
 def is_already_posted(client, new_text):
     try:
-        log("[CHECK]", "DEDUP", "Checking last 2 posts in Bluesky feed...")
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=2, filter='posts_no_replies')
+        log("[CHECK]", "DEDUP", "Checking last 8 posts in Bluesky feed...")
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=8, filter='posts_no_replies')
 
         new_text_clean = _normalize_for_dedup(new_text.strip().lower())
         log("  →", "DEDUP", f"New (normalized):      {new_text_clean[:100]}")
