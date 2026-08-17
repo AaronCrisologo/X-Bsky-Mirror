@@ -1,6 +1,7 @@
 from fallbacks import get_fallback_data
 
 import io
+import sys
 import time
 import datetime
 from atproto import Client, client_utils, models
@@ -226,7 +227,8 @@ def is_already_posted(client, new_text):
         log("[OK]", "DEDUP", "No duplicate found")
 
     except Exception as e:
-        gha_warning(f"DEDUP: could not check Bluesky feed: {e}")
+        gha_error(f"DEDUP: could not check Bluesky feed: {e}")
+        sys.exit(1)
     return False
 
 
