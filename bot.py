@@ -304,7 +304,7 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets):
     # Must have at least one component after "More info" (arrow, URL, parenthetical, hashtag).
     # Bare "More info" alone is NOT filtered (it may be a real post). Case-insensitive.
     if re.match(
-        r'^More info\s+(?:'
+        r'^More info\s*(?:'
         + r'(?:➡️|›|→)\s*'
         + r'|\([^)]*\)\s*'
         + r'|(?:(?:https?://)?(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}\S*)\s*'
