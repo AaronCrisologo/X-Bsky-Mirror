@@ -208,13 +208,12 @@ async function getLatestTweets(username, maxTweets = 8) {
     ghaGroup('[BROWSER] Browser Launch');
     const launchTimer = timer();
     const browser = await puppeteer.launch({
-        headless: 'new',
+        headless: false,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--single-process',
             '--disable-blink-features=AutomationControlled'
         ]
     });
