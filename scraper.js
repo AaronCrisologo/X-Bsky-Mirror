@@ -267,22 +267,44 @@ async function getLatestTweets(username, maxTweets = 8) {
         await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
 
         const navTimer = timer();
-        const response = await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2', timeout: 45000 });
-        log('[OK]', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
+        const response = await page.goto(`https://x.com/${username}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        log('[OK]', 'NAV', `Initial load at ${page.url()} in ${navTimer()}`);
 
-        // Check if Twitter blocked us
+        // Check if Twitter/Cloudflare blocked us
         if (response && response.status() >= 400) {
             log('[WARN]', 'NAV', `Page returned HTTP ${response.status()} — may be blocked`);
         }
 
         // Log page title for debugging
-        const pageTitle = await page.title();
+        let pageTitle = await page.title();
         log('[INFO]', 'NAV', `Page title: "${pageTitle}"`);
+
+        // Wait for Cloudflare challenge to resolve (title changes from "Just a moment...")
+        if (pageTitle.includes('moment') || pageTitle.includes('Cloudflare') || pageTitle.includes('security')) {
+            log('[INFO]', 'NAV', 'Cloudflare challenge detected — waiting for resolution...');
+            try {
+                await page.waitForFunction(
+                    () => !document.title.includes('moment') && !document.title.includes('Cloudflare'),
+                    { timeout: 20000 }
+                );
+                pageTitle = await page.title();
+                log('[OK]', 'NAV', `Challenge resolved. New title: "${pageTitle}"`);
+                // Give Twitter a moment to finish rendering after Cloudflare
+                await new Promise(r => setTimeout(r, 3000));
+            } catch (e) {
+                const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '(empty)');
+                log('[ERROR]', 'NAV', `Cloudflare challenge did not resolve. Page body: ${bodyText}`);
+                throw new Error('Cloudflare challenge did not resolve');
+            }
+        }
+
+        // Wait for network to settle after challenge
+        await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {});
 
         // Try primary selector, fall back to alternative
         const selectorTimer = timer();
         try {
-            await page.waitForSelector('article', { timeout: 15000 });
+            await page.waitForSelector('article', { timeout: 30000 });
             log('[OK]', 'DOM', `First <article> visible in ${selectorTimer()}`);
         } catch (e) {
             log('[WARN]', 'DOM', `No <article> found in ${selectorTimer()}, trying [data-testid="tweet"]...`);
