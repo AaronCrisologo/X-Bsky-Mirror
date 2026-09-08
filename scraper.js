@@ -276,6 +276,11 @@ async function getLatestTweets(username, maxTweets = 8) {
                     const isPinned = article.innerText.includes('Pinned');
                     const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
 
+                    // Reply detection: look for "Replying to @handle" context
+                    const replyLine = article.querySelector('[data-testid="socialContext"]');
+                    const isReply = !!(replyLine && replyLine.innerText.includes('Replying to'));
+                    const replyToHandle = isReply ? (replyLine.innerText.match(/@(\w+)/) || [])[1] || null : null;
+
                     if (!timeEl) return;
 
                     let tweetText = '';
@@ -329,6 +334,8 @@ async function getLatestTweets(username, maxTweets = 8) {
                         text:     tweetText,
                         time:     timeEl.getAttribute('datetime'),
                         isPinned,
+                        isReply,
+                        replyToHandle,
                         hasVideo,
                         videoId,
                         images:   Array.from(imageSet)
@@ -354,7 +361,8 @@ async function getLatestTweets(username, maxTweets = 8) {
         scrapeResult.forEach((t, i) => {
             log(`  [${i}]`, 'ARTICLE',
                 `time=${t.time} | video=${t.hasVideo} | videoId=${t.videoId || 'none'} | ` +
-                `images=${t.images.length} | text="${t.text.substring(0, 80).replace(/\n/g, ' ')}..."`
+                `images=${t.images.length} | reply=${t.isReply} | replyTo=${t.replyToHandle || 'none'} | ` +
+                `text="${t.text.substring(0, 80).replace(/\n/g, ' ')}..."`
             );
         });
 

@@ -176,7 +176,7 @@ def get_latest_tweet_data():
         tweets = data.get('tweets', [])
         log("[OK]", "SCRAPER", f"Received {len(tweets)} tweet(s)")
         for i, tw in enumerate(tweets):
-            log("[OK]", "SCRAPER", f"  Tweet {i}: text_len={len(tw.get('text',''))} images={len(tw.get('images',[]))} hasVideo={tw.get('hasVideo',False)} videoPath={tw.get('videoPath','(none)')} time={tw.get('time','?')}")
+            log("[OK]", "SCRAPER", f"  Tweet {i}: text_len={len(tw.get('text',''))} images={len(tw.get('images',[]))} hasVideo={tw.get('hasVideo',False)} videoPath={tw.get('videoPath','(none)')} time={tw.get('time','?')} isReply={tw.get('isReply',False)} replyTo={tw.get('replyToHandle','none')}")
         gha_end_group()
         return data
 
@@ -230,6 +230,38 @@ def is_already_posted(client, new_text):
         gha_error(f"DEDUP: could not check Bluesky feed: {e}")
         sys.exit(1)
     return False
+
+
+# === Find parent post for reply threading ===
+def find_parent_post(client, parent_text_hint):
+    """
+    Search recent Bluesky posts for one matching the parent tweet text.
+    Returns (uri, cid) or (None, None) if not found.
+    Stateless — uses text matching against the last 20 posts.
+    """
+    try:
+        log("[LOOKUP]", "REPLY", f"Searching for parent post matching text hint...")
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=10, filter='posts_no_replies')
+
+        normalized_hint = _normalize_for_dedup(parent_text_hint.strip().lower())
+
+        for i, view in enumerate(response.feed):
+            existing_text = _normalize_for_dedup(view.post.record.text.strip().lower())
+
+            if existing_text == normalized_hint:
+                log("[OK]", "REPLY", f"Exact match found on post #{i+1} — {view.post.uri}")
+                return view.post.uri, view.post.cid
+
+            if len(normalized_hint) > 50 and normalized_hint[:100] == existing_text[:100]:
+                log("[OK]", "REPLY", f"Partial match (first 100 chars) on post #{i+1} — {view.post.uri}")
+                return view.post.uri, view.post.cid
+
+        log("[WARN]", "REPLY", "No matching parent post found in last 10 posts")
+        return None, None
+
+    except Exception as e:
+        log("[WARN]", "REPLY", f"Could not search for parent post: {e}")
+        return None, None
 
 
 # === Link card / embed helpers ===
@@ -288,8 +320,10 @@ def build_link_card(client, url, og):
 SIMULATION_MODE = False  # Set to True to test without running X scraper
 
 
-def process_tweet(client, tweet_data, tweet_index, total_tweets):
-    """Process a single tweet: check dedup, download media, post to Bluesky, cleanup."""
+def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref=None):
+    """Process a single tweet: check dedup, download media, post to Bluesky, cleanup.
+    Returns (success, reason, posted_ref) where posted_ref is (uri, cid) if posted, else None.
+    """
     raw_text = tweet_data.get('text', '')
     post_text = "\n".join([line.strip() for line in raw_text.splitlines()]).strip()
 
@@ -314,7 +348,7 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets):
         re.IGNORECASE
     ):
         log("[INFO]", "MAIN", f"Post text is just a bare link ('{post_text[:60]}…') — skipping")
-        return False, "skipped_bare_link"
+        return False, "skipped_bare_link", None
 
     log("[NOTE]", "MAIN", f"Tweet {tweet_index+1}/{total_tweets} text ({len(post_text)} chars): {post_text[:150]}...")
 
@@ -329,20 +363,47 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets):
             is_recent = True
         else:
             gha_warning(f"Tweet is {(now - tweet_datetime).days} day(s) old — too old to post")
-            return False, "too_old"
+            return False, "too_old", None
     else:
         gha_warning("No valid timestamp in tweet data")
-        return False, "no_timestamp"
+        return False, "no_timestamp", None
 
     # Check dedup
     if not post_text:
         log("[INFO]", "MAIN", "Empty post text — skipping")
-        return False, "empty_text"
+        return False, "empty_text", None
 
     if is_already_posted(client, post_text):
-        return False, "duplicate"
+        return False, "duplicate", None
 
     log("[NEW]", "MAIN", f"New content detected for tweet {tweet_index+1} — processing post")
+
+    # Reply detection: look up parent post for threading
+    reply_ref = None
+    is_reply = tweet_data.get('isReply', False)
+    if is_reply:
+        reply_to_handle = tweet_data.get('replyToHandle')
+        log("[INFO]", "REPLY", f"Tweet is a reply to @{reply_to_handle or '?'}")
+
+        # For threads, the last posted tweet is likely the parent
+        if last_posted_ref:
+            parent_uri, parent_cid = last_posted_ref
+            reply_ref = models.AppBskyFeedPost.ReplyRef(
+                parent=models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid),
+                root=models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid)
+            )
+            log("[OK]", "REPLY", f"Using last posted tweet as parent: {parent_uri}")
+        else:
+            # Fall back to text matching against recent Bluesky posts
+            parent_uri, parent_cid = find_parent_post(client, post_text)
+            if parent_uri and parent_cid:
+                reply_ref = models.AppBskyFeedPost.ReplyRef(
+                    parent=models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid),
+                    root=models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid)
+                )
+                log("[OK]", "REPLY", f"Found parent post via text match: {parent_uri}")
+            else:
+                log("[WARN]", "REPLY", "Parent post not found — posting as standalone")
 
     try:
         image_urls = tweet_data.get('images', [])
@@ -478,15 +539,20 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets):
                 )
                 if video_aspect_ratio:
                     send_kwargs['video_aspect_ratio'] = video_aspect_ratio
+                if reply_ref:
+                    send_kwargs['reply_to'] = reply_ref
                 client.send_video(**send_kwargs)
             elif len(images_to_upload) >= 1:
                 log("[SEND]", "MAIN", f"Posting to Bluesky with {len(images_to_upload)} image(s)...")
-                client.send_images(
+                send_kwargs = dict(
                     text=post_text_with_facets,
                     images=images_to_upload,
                     image_alts=[final_alt_text] * len(images_to_upload),
                     image_aspect_ratios=aspect_ratios
                 )
+                if reply_ref:
+                    send_kwargs['reply_to'] = reply_ref
+                client.send_images(**send_kwargs)
             else:
                 # Text-only post — try to attach a link card for the first URL
                 link_embed = None
@@ -508,11 +574,24 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets):
                     log("[INFO]", "MAIN", "No URL in text — posting without embed")
 
                 log("[SEND]", "MAIN", f"Posting text-only to Bluesky{'  (with link card)' if link_embed else ''}")
-                client.send_post(text=post_text_with_facets, embed=link_embed)
+                send_kwargs = dict(text=post_text_with_facets, embed=link_embed)
+                if reply_ref:
+                    send_kwargs['reply_to'] = reply_ref
+                client.send_post(**send_kwargs)
 
             log("[OK]", "MAIN", "Posted successfully!")
             gha_notice("New post published to Bluesky")
-            return True, "posted"
+            # Capture the new post's ref for threading (we need to fetch it from the feed)
+            posted_ref = None
+            try:
+                check_response = client.get_author_feed(actor=BSKY_HANDLE, limit=1, filter='posts_no_replies')
+                if check_response.feed:
+                    latest = check_response.feed[0].post
+                    posted_ref = (latest.uri, latest.cid)
+                    log("[REPLY]", "MAIN", f"Captured new post ref: {latest.uri}")
+            except Exception as e:
+                log("[WARN]", "MAIN", f"Could not capture new post ref: {e}")
+            return True, "posted", posted_ref
 
         except Exception as e:
             # Extract error message from atproto exceptions (details often in response, not str(e))
@@ -531,7 +610,7 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets):
             if not error_msg:
                 error_msg = f"{type(e).__name__} (no message)"
             gha_error(f"Post failed at API level: {error_msg}")
-            return False, "post_failed"
+            return False, "post_failed", None
 
     finally:
         # Cleanup temp files for this tweet
@@ -603,6 +682,7 @@ def main():
     # This ensures chronological posting order
     posted_count = 0
     skipped_count = 0
+    last_posted_ref = None  # Track the most recently posted tweet's (uri, cid) for threading
 
     for tweet_index, tweet_data in enumerate(reversed(tweets)):
         # Calculate original index for file naming
@@ -611,10 +691,12 @@ def main():
 
         log("[PROCESS]", "MAIN", f"=== Processing tweet {tweet_index+1}/{len(tweets)} (original index {original_index}) ===")
 
-        success, reason = process_tweet(client, tweet_data, original_index, len(tweets))
+        success, reason, posted_ref = process_tweet(client, tweet_data, original_index, len(tweets), last_posted_ref)
 
         if success:
             posted_count += 1
+            if posted_ref:
+                last_posted_ref = posted_ref
             log("[OK]", "MAIN", f"Successfully posted tweet {tweet_index+1}/{len(tweets)}")
         else:
             if reason not in ("duplicate", "too_old", "no_timestamp", "empty_text", "skipped_bare_link"):
