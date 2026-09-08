@@ -380,7 +380,7 @@ function parseTweetEntry(entry) {
 
     // Check reply status
     const isReply = !!legacy.in_reply_to_status_id_str;
-    const replyToHandle = tweet.core?.user_results?.result?.legacy?.screen_name || null;
+    const replyToHandle = legacy.in_reply_to_screen_name || null;
 
     // Check if pinned
     const isPinned = entry.content?.entryType === 'TimelineTimelineItem' && entry.sortIndex === undefined;
@@ -450,9 +450,15 @@ async function getLatestTweets(username, maxTweets = 8) {
             const tweet = scrapeResult[tweetIdx];
             for (let imgIdx = 0; imgIdx < tweet.images.length; imgIdx++) {
                 const originalUrl = tweet.images[imgIdx];
-                const highResUrl = originalUrl.includes('?')
-                    ? originalUrl.replace(/\?[^?]+$/, '?format=jpg&name=orig')
-                    : `${originalUrl}?format=jpg&name=orig`;
+                let highResUrl;
+                if (originalUrl.includes('?')) {
+                    const [base, params] = originalUrl.split('?');
+                    const urlParams = new URLSearchParams(params);
+                    urlParams.set('name', 'orig');
+                    highResUrl = `${base}?${urlParams.toString()}`;
+                } else {
+                    highResUrl = `${originalUrl}?format=jpg&name=orig`;
+                }
 
                 const filename = `tweet_img_${tweetIdx}_${imgIdx}.jpg`;
                 log('[DOWNLOAD]', `IMG[t${tweetIdx}_${imgIdx}]`, highResUrl);
