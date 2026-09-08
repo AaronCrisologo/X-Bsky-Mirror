@@ -205,7 +205,7 @@ def _normalize_for_dedup(text):
 def is_already_posted(client, new_text):
     try:
         log("[CHECK]", "DEDUP", "Checking last 8 posts in Bluesky feed...")
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=8, filter='posts_no_replies')
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=8, filter='posts_with_replies')
 
         new_text_clean = _normalize_for_dedup(new_text.strip().lower())
         log("  →", "DEDUP", f"New (normalized):      {new_text_clean[:100]}")
@@ -237,11 +237,11 @@ def find_parent_post(client, parent_text_hint):
     """
     Search recent Bluesky posts for one matching the parent tweet text.
     Returns (uri, cid) or (None, None) if not found.
-    Stateless — uses text matching against the last 20 posts.
+    Stateless — uses text matching against the last 8 posts (with replies).
     """
     try:
         log("[LOOKUP]", "REPLY", f"Searching for parent post matching text hint...")
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=10, filter='posts_no_replies')
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=8, filter='posts_with_replies')
 
         normalized_hint = _normalize_for_dedup(parent_text_hint.strip().lower())
 
@@ -256,7 +256,7 @@ def find_parent_post(client, parent_text_hint):
                 log("[OK]", "REPLY", f"Partial match (first 100 chars) on post #{i+1} — {view.post.uri}")
                 return view.post.uri, view.post.cid
 
-        log("[WARN]", "REPLY", "No matching parent post found in last 10 posts")
+        log("[WARN]", "REPLY", "No matching parent post found in last 8 posts")
         return None, None
 
     except Exception as e:
@@ -337,7 +337,9 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
     # Skip if the tweet is just a bare "More info" link card with no real content.
     # Must have at least one component after "More info" (arrow, URL, parenthetical, hashtag).
     # Bare "More info" alone is NOT filtered (it may be a real post). Case-insensitive.
-    if re.match(
+    # Replies are exempt — "More info ➡️ ..." thread parts should post as threaded replies.
+    is_reply_early = tweet_data.get('isReply', False)
+    if not is_reply_early and re.match(
         r'^More info\s*(?:'
         + r'(?:➡️|›|→)\s*'
         + r'|\([^)]*\)\s*'

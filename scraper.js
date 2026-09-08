@@ -461,6 +461,7 @@ function parseTweetEntry(entry) {
     // Check reply status
     const isReply = !!legacy.in_reply_to_status_id_str;
     const replyToHandle = legacy.in_reply_to_screen_name || null;
+    const inReplyToStatusId = legacy.in_reply_to_status_id_str || null;
 
     // Check if pinned
     const isPinned = entry.content?.entryType === 'TimelineTimelineItem' && entry.sortIndex === undefined;
@@ -471,6 +472,7 @@ function parseTweetEntry(entry) {
         isPinned,
         isReply,
         replyToHandle,
+        inReplyToStatusId,
         hasVideo,
         videoId,
         videoUrl,
@@ -514,7 +516,7 @@ async function getLatestTweets(username, maxTweets = 8) {
         scrapeResult.forEach((t, i) => {
             log(`  [${i}]`, 'ARTICLE',
                 `time=${t.time} | video=${t.hasVideo} | videoId=${t.videoId || 'none'} | ` +
-                `images=${t.images.length} | reply=${t.isReply} | replyTo=${t.replyToHandle || 'none'} | ` +
+                `images=${t.images.length} | reply=${t.isReply} | replyTo=${t.replyToHandle || 'none'} | parentId=${t.inReplyToStatusId || 'none'} | ` +
                 `text="${t.text.substring(0, 80).replace(/\n/g, ' ')}..."`
             );
         });
