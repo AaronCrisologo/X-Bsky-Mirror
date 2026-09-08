@@ -209,12 +209,23 @@ async function getLatestTweets(username, maxTweets = 8) {
     const launchTimer = timer();
     const browser = await puppeteer.launch({
         headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--single-process']
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--single-process',
+            '--disable-blink-features=AutomationControlled'
+        ]
     });
     log('[OK]', 'BROWSER', `Launched in ${launchTimer()}`);
     ghaEndGroup();
 
     const page = await browser.newPage();
+
+    // ── Set realistic viewport and user-agent ────────────────────────────────
+    await page.setViewport({ width: 1366, height: 768 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
 
     // ── Network monitoring: capture ALL m3u8 manifests ────────────────────────
     const m3u8Bodies = new Map(); // videoId -> array of { url, body }
@@ -251,15 +262,40 @@ async function getLatestTweets(username, maxTweets = 8) {
         ghaGroup(`[NAV] Page Load — x.com/${username}`);
         await page.setCookie(...rawCookies);
         log('[COOKIES]', 'COOKIES', 'auth_token + ct0 injected');
-        await page.setViewport({ width: 1280, height: 1000 });
+
+        // Small random delay before navigation to appear more human
+        await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
 
         const navTimer = timer();
-        await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2' });
+        const response = await page.goto(`https://x.com/${username}`, { waitUntil: 'networkidle2', timeout: 45000 });
         log('[OK]', 'NAV', `Settled at ${page.url()} in ${navTimer()}`);
 
+        // Check if Twitter blocked us
+        if (response && response.status() >= 400) {
+            log('[WARN]', 'NAV', `Page returned HTTP ${response.status()} — may be blocked`);
+        }
+
+        // Log page title for debugging
+        const pageTitle = await page.title();
+        log('[INFO]', 'NAV', `Page title: "${pageTitle}"`);
+
+        // Try primary selector, fall back to alternative
         const selectorTimer = timer();
-        await page.waitForSelector('article', { timeout: 30000 });
-        log('[OK]', 'DOM', `First <article> visible in ${selectorTimer()}`);
+        try {
+            await page.waitForSelector('article', { timeout: 15000 });
+            log('[OK]', 'DOM', `First <article> visible in ${selectorTimer()}`);
+        } catch (e) {
+            log('[WARN]', 'DOM', `No <article> found in ${selectorTimer()}, trying [data-testid="tweet"]...`);
+            try {
+                await page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 });
+                log('[OK]', 'DOM', `First [data-testid="tweet"] visible in ${selectorTimer()}`);
+            } catch (e2) {
+                // Dump page content for debugging
+                const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '(empty)');
+                log('[ERROR]', 'DOM', `No tweets found. Page body preview: ${bodyText}`);
+                throw new Error('No tweet elements found on page');
+            }
+        }
         ghaEndGroup();
 
         // ── Scrape ───────────────────────────────────────────────────────────
@@ -269,7 +305,11 @@ async function getLatestTweets(username, maxTweets = 8) {
         const scrapeResult = await page.evaluate(async (maxTweets) => {
             const results = [];
             for (let scroll = 0; scroll < 5; scroll++) {
-                const articles = Array.from(document.querySelectorAll('article'));
+                // Try both selectors — article is the main one, tweet is a fallback
+                let articles = Array.from(document.querySelectorAll('article'));
+                if (articles.length === 0) {
+                    articles = Array.from(document.querySelectorAll('[data-testid="tweet"]'));
+                }
                 articles.forEach(article => {
                     const timeEl   = article.querySelector('time');
                     const textEl   = article.querySelector('[data-testid="tweetText"]');
