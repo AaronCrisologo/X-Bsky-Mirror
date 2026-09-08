@@ -540,7 +540,9 @@ async function getLatestTweets(username, maxTweets = 8) {
                     urlParams.set('name', 'orig');
                     highResUrl = `${base}?${urlParams.toString()}`;
                 } else {
-                    highResUrl = `${originalUrl}?format=jpg&name=orig`;
+                    const ext = originalUrl.split('.').pop().toLowerCase();
+                    const fmt = ext === 'png' ? 'png' : 'jpg';
+                    highResUrl = `${originalUrl}?format=${fmt}&name=orig`;
                 }
 
                 const filename = `tweet_img_${tweetIdx}_${imgIdx}.jpg`;
