@@ -1,14 +1,35 @@
 process.stdout.setEncoding('utf8');
 process.stderr.setEncoding('utf8');
 
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const fs = require('fs');
 const https = require('https');
+const http = require('http');
+const fs = require('fs');
 const { execFile } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 
-puppeteer.use(StealthPlugin());
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
+
+// Hardcoded query IDs (update if Twitter rotates them)
+const QUERY_IDS = {
+    UserByScreenName: '1VOOyvKkiI3FMmkeDNxM9A',
+    UserTweets: '2ItQrd86P8C0pDU6td3Z7Q',
+};
+
+const FEATURES = {
+    rweb_tipjar_consumption_enabled: true,
+    responsive_web_graphql_exclude_directive_enabled: true,
+    verified_phone_label_enabled: false,
+    subscriptions_verification_info_is_identity_verified_enabled: true,
+    subscriptions_verification_info_verified_since_enabled: true,
+    highlights_tweets_tab_ui_enabled: true,
+    responsive_web_twitter_article_notes_tab_enabled: true,
+    subscriptions_feature_can_gift_premium: true,
+    creator_subscriptions_tweet_preview_api_enabled: true,
+    responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+};
 
 // ─── Logging helpers ──────────────────────────────────────────────────────────
 
@@ -67,31 +88,66 @@ function validateEnv() {
     return valid;
 }
 
-// ─── Cookies ──────────────────────────────────────────────────────────────────
+// ─── HTTP helpers ─────────────────────────────────────────────────────────────
 
-const rawCookies = [
-    { domain: '.x.com', name: 'auth_token', value: process.env.X_AUTH_TOKEN, path: '/', secure: true, sameSite: 'Lax' },
-    { domain: '.x.com', name: 'ct0',        value: process.env.X_CT0,        path: '/', secure: true, sameSite: 'Lax' }
-];
-
-
-// ─── Helper: Download file via HTTPS ──────────────────────────────────────────
-
-function downloadFile(url, destPath) {
+function httpsGet(url, headers) {
     return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(destPath);
-        https.get(url, (res) => {
+        const parsedUrl = new URL(url);
+        const options = {
+            hostname: parsedUrl.hostname,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://x.com/',
+                'Origin': 'https://x.com',
+                ...headers,
+            },
+        };
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+                resolve({ status: res.statusCode, headers: res.headers, body: data });
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(30000, () => { req.destroy(); reject(new Error('Request timeout')); });
+        req.end();
+    });
+}
+
+function httpsGetBinary(url, destPath, headers) {
+    return new Promise((resolve, reject) => {
+        const parsedUrl = new URL(url);
+        const options = {
+            hostname: parsedUrl.hostname,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                ...headers,
+            },
+        };
+        const req = https.request(options, (res) => {
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                httpsGetBinary(res.headers.location, destPath, headers).then(resolve).catch(reject);
+                return;
+            }
             if (res.statusCode !== 200) {
-                fs.unlink(destPath, () => {});
+                res.resume();
                 reject(new Error(`HTTP ${res.statusCode}: ${url}`));
                 return;
             }
+            const file = fs.createWriteStream(destPath);
             res.pipe(file);
             file.on('finish', () => file.close(() => resolve(destPath)));
-        }).on('error', (err) => {
-            fs.unlink(destPath, () => {});
-            reject(err);
         });
+        req.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
+        req.setTimeout(60000, () => { req.destroy(); reject(new Error('Download timeout')); });
+        req.end();
     });
 }
 
@@ -193,6 +249,158 @@ function muxVideo(videoPath, audioPath, outputPath) {
     });
 }
 
+// ─── GraphQL API helpers ──────────────────────────────────────────────────────
+
+function buildGraphQLUrl(queryId, operationName, variables, features) {
+    const params = new URLSearchParams();
+    params.set('variables', JSON.stringify(variables));
+    params.set('features', JSON.stringify(features));
+    return `https://x.com/i/api/graphql/${queryId}/${operationName}?${params.toString()}`;
+}
+
+function getAuthHeaders(ct0) {
+    return {
+        'authorization': `Bearer ${BEARER_TOKEN}`,
+        'x-csrf-token': ct0,
+        'x-twitter-auth-type': 'OAuth2Session',
+        'x-twitter-active-user': 'yes',
+        'x-twitter-client-language': 'en',
+        'cookie': `auth_token=${process.env.X_AUTH_TOKEN}; ct0=${ct0}`,
+    };
+}
+
+async function getUserId(username, ct0) {
+    const variables = { screen_name: username, withSafetyModeUserFields: true };
+    const url = buildGraphQLUrl(QUERY_IDS.UserByScreenName, 'UserByScreenName', variables, FEATURES);
+    log('[INFO]', 'API', `Fetching user ID for @${username}...`);
+
+    const res = await httpsGet(url, getAuthHeaders(ct0));
+    if (res.status !== 200) {
+        throw new Error(`UserByScreenName returned HTTP ${res.status}: ${res.body.substring(0, 300)}`);
+    }
+
+    const data = JSON.parse(res.body);
+    const userResult = data?.data?.user?.result;
+    if (!userResult) {
+        throw new Error(`User @${username} not found`);
+    }
+
+    const userId = userResult.rest_id;
+    log('[OK]', 'API', `User ID: ${userId}`);
+    return userId;
+}
+
+async function getUserTweets(userId, ct0, count = 8) {
+    const variables = {
+        userId,
+        count,
+        includePromotedContent: false,
+        withQuickPromoteEligibilityTweetFields: true,
+        withVoice: true,
+        withV2Timeline: true,
+    };
+    const url = buildGraphQLUrl(QUERY_IDS.UserTweets, 'UserTweets', variables, FEATURES);
+    log('[INFO]', 'API', `Fetching ${count} tweets for user ${userId}...`);
+
+    const res = await httpsGet(url, getAuthHeaders(ct0));
+    if (res.status !== 200) {
+        throw new Error(`UserTweets returned HTTP ${res.status}: ${res.body.substring(0, 300)}`);
+    }
+
+    const data = JSON.parse(res.body);
+    const instructions = data?.data?.user?.result?.timeline?.timeline?.instructions || [];
+
+    const tweets = [];
+    for (const instruction of instructions) {
+        const entries = instruction.entries || [];
+        for (const entry of entries) {
+            const tweet = parseTweetEntry(entry);
+            if (tweet) tweets.push(tweet);
+        }
+    }
+
+    log('[OK]', 'API', `Parsed ${tweets.length} tweet(s) from timeline`);
+    return tweets;
+}
+
+function parseTweetEntry(entry) {
+    const itemContent = entry?.content?.itemContent;
+    if (!itemContent || itemContent.__typename !== 'TimelineTweet') return null;
+
+    const tweetResults = itemContent.tweet_results;
+    if (!tweetResults?.result) return null;
+
+    const result = tweetResults.result;
+    // Handle TweetWithVisibilityResults wrapper
+    const tweet = result.__typename === 'TweetWithVisibilityResults' ? result.tweet : result;
+    if (!tweet) return null;
+
+    const legacy = tweet.legacy;
+    if (!legacy) return null;
+
+    // Check if it's a retweet — skip those
+    if (legacy.retweeted_status_result) return null;
+
+    // Extract text
+    const text = legacy.full_text || '';
+
+    // Extract timestamp
+    const time = legacy.created_at ? new Date(legacy.created_at).toISOString() : null;
+
+    // Extract media
+    const images = [];
+    let hasVideo = false;
+    let videoId = null;
+    let videoUrl = null;
+    let videoWidth = null;
+    let videoHeight = null;
+
+    const media = legacy.extended_entities?.media || [];
+    for (const m of media) {
+        if (m.type === 'photo') {
+            images.push(m.media_url_https);
+        } else if (m.type === 'video' || m.type === 'animated_gif') {
+            hasVideo = true;
+            videoId = m.id_str;
+            // Find best MP4 variant
+            const variants = m.video_info?.variants || [];
+            const mp4s = variants
+                .filter(v => v.content_type === 'video/mp4')
+                .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+            if (mp4s.length > 0) {
+                videoUrl = mp4s[0].url;
+            }
+            // Extract dimensions
+            if (m.original_info) {
+                videoWidth = m.original_info.width;
+                videoHeight = m.original_info.height;
+            }
+        }
+    }
+
+    // Check reply status
+    const isReply = !!legacy.in_reply_to_status_id_str;
+    const replyToHandle = tweet.core?.user_results?.result?.legacy?.screen_name || null;
+
+    // Check if pinned
+    const isPinned = entry.content?.entryType === 'TimelineTimelineItem' && entry.sortIndex === undefined;
+
+    return {
+        text,
+        time,
+        isPinned,
+        isReply,
+        replyToHandle,
+        hasVideo,
+        videoId,
+        videoUrl,
+        images,
+        videoWidth,
+        videoHeight,
+        tweetId: legacy.id_str,
+    };
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function getLatestTweets(username, maxTweets = 8) {
@@ -204,221 +412,22 @@ async function getLatestTweets(username, maxTweets = 8) {
         process.exit(1);
     }
 
-    // ── Browser ──────────────────────────────────────────────────────────────
-    ghaGroup('[BROWSER] Browser Launch');
-    const launchTimer = timer();
-    const browser = await puppeteer.launch({
-        headless: false,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-blink-features=AutomationControlled'
-        ]
-    });
-    log('[OK]', 'BROWSER', `Launched in ${launchTimer()}`);
-    ghaEndGroup();
-
-    const page = await browser.newPage();
-
-    // ── Set realistic viewport and user-agent ────────────────────────────────
-    await page.setViewport({ width: 1366, height: 768 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
-
-    // ── Network monitoring: capture ALL m3u8 manifests ────────────────────────
-    const m3u8Bodies = new Map(); // videoId -> array of { url, body }
-    const m3u8Logs = [];
-
-    page.on('response', async (res) => {
-        const url = res.url();
-        if (url.includes('video.twimg.com') && url.includes('.m3u8')) {
-            const m = url.match(/ext_tw_video\/(\d+)\//);
-            const videoId = m ? m[1] : 'unknown';
-            try {
-                const body = await res.text();
-                if (!m3u8Bodies.has(videoId)) m3u8Bodies.set(videoId, []);
-                m3u8Bodies.get(videoId).push({ url, body });
-                m3u8Logs.push({ icon: '[MANIFEST]', tag: 'M3U8', msg: `Captured manifest for videoId=${videoId} (${body.length} chars): ${url}` });
-            } catch (e) {
-                m3u8Logs.push({ icon: '[WARN]', tag: 'M3U8', msg: `Could not read body for ${url}: ${e.message}` });
-            }
-        }
-    });
-
-    let reqTotal = 0, reqFailed = 0;
-    page.on('response',      ()    => { reqTotal++; });
-    page.on('requestfailed', (req) => {
-        reqFailed++;
-        log('[BLOCKED]', 'BLOCKED', `${req.failure()?.errorText} — ${req.url().substring(0, 100)}`);
-    });
-    page.on('console', (msg) => {
-        if (msg.type() === 'error') log('[PAGE_ERR]', 'PAGE_ERR', msg.text());
-    });
+    const ct0 = process.env.X_CT0;
 
     try {
-        // ── Page load ────────────────────────────────────────────────────────
-        ghaGroup(`[NAV] Page Load — x.com/${username}`);
-        await page.setCookie(...rawCookies);
-        log('[COOKIES]', 'COOKIES', 'auth_token + ct0 injected');
-
-        // Small random delay before navigation to appear more human
-        await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
-
-        const navTimer = timer();
-        const response = await page.goto(`https://x.com/${username}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        log('[OK]', 'NAV', `Initial load at ${page.url()} in ${navTimer()}`);
-
-        // Check if Twitter/Cloudflare blocked us
-        if (response && response.status() >= 400) {
-            log('[WARN]', 'NAV', `Page returned HTTP ${response.status()} — may be blocked`);
-        }
-
-        // Log page title for debugging
-        let pageTitle = await page.title();
-        log('[INFO]', 'NAV', `Page title: "${pageTitle}"`);
-
-        // Wait for Cloudflare challenge to resolve (title changes from "Just a moment...")
-        if (pageTitle.includes('moment') || pageTitle.includes('Cloudflare') || pageTitle.includes('security')) {
-            log('[INFO]', 'NAV', 'Cloudflare challenge detected — waiting for resolution...');
-            try {
-                await page.waitForFunction(
-                    () => !document.title.includes('moment') && !document.title.includes('Cloudflare'),
-                    { timeout: 20000 }
-                );
-                pageTitle = await page.title();
-                log('[OK]', 'NAV', `Challenge resolved. New title: "${pageTitle}"`);
-                // Give Twitter a moment to finish rendering after Cloudflare
-                await new Promise(r => setTimeout(r, 3000));
-            } catch (e) {
-                const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '(empty)');
-                log('[ERROR]', 'NAV', `Cloudflare challenge did not resolve. Page body: ${bodyText}`);
-                throw new Error('Cloudflare challenge did not resolve');
-            }
-        }
-
-        // Wait for network to settle after challenge
-        await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {});
-
-        // Try primary selector, fall back to alternative
-        const selectorTimer = timer();
-        try {
-            await page.waitForSelector('article', { timeout: 30000 });
-            log('[OK]', 'DOM', `First <article> visible in ${selectorTimer()}`);
-        } catch (e) {
-            log('[WARN]', 'DOM', `No <article> found in ${selectorTimer()}, trying [data-testid="tweet"]...`);
-            try {
-                await page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 });
-                log('[OK]', 'DOM', `First [data-testid="tweet"] visible in ${selectorTimer()}`);
-            } catch (e2) {
-                // Dump page content for debugging
-                const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '(empty)');
-                log('[ERROR]', 'DOM', `No tweets found. Page body preview: ${bodyText}`);
-                throw new Error('No tweet elements found on page');
-            }
-        }
+        // Step 1: Get user ID
+        ghaGroup('[API] Fetch User ID');
+        const apiTimer = timer();
+        const userId = await getUserId(username, ct0);
+        log('[OK]', 'API', `User ID resolved in ${apiTimer()}`);
         ghaEndGroup();
 
-        // ── Scrape ───────────────────────────────────────────────────────────
-        ghaGroup('[SCRAPE] Scraping Tweets');
-        const scrapeTimer = timer();
+        // Step 2: Get tweets
+        ghaGroup('[API] Fetch Tweets');
+        const tweetTimer = timer();
+        const scrapeResult = await getUserTweets(userId, ct0, maxTweets);
+        log('[OK]', 'API', `${scrapeResult.length} tweet(s) fetched in ${tweetTimer()}`);
 
-        const scrapeResult = await page.evaluate(async (maxTweets) => {
-            const results = [];
-            for (let scroll = 0; scroll < 5; scroll++) {
-                // Try both selectors — article is the main one, tweet is a fallback
-                let articles = Array.from(document.querySelectorAll('article'));
-                if (articles.length === 0) {
-                    articles = Array.from(document.querySelectorAll('[data-testid="tweet"]'));
-                }
-                articles.forEach(article => {
-                    const timeEl   = article.querySelector('time');
-                    const textEl   = article.querySelector('[data-testid="tweetText"]');
-                    const isPinned = article.innerText.includes('Pinned');
-                    const hasVideo = !!article.querySelector('[data-testid="videoPlayer"], video');
-
-                    // Reply detection: look for "Replying to @handle" context
-                    const replyLine = article.querySelector('[data-testid="socialContext"]');
-                    const isReply = !!(replyLine && replyLine.innerText.includes('Replying to'));
-                    const replyToHandle = isReply ? (replyLine.innerText.match(/@(\w+)/) || [])[1] || null : null;
-
-                    if (!timeEl) return;
-
-                    let tweetText = '';
-                    if (textEl) {
-                        const processNode = (n) => {
-                            n.childNodes.forEach(child => {
-                                if (child.nodeType === Node.TEXT_NODE) tweetText += child.textContent;
-                                else if (child.nodeName === 'IMG')       tweetText += child.alt || '';
-                                else if (child.childNodes)               processNode(child);
-                            });
-                        };
-                        processNode(textEl);
-                    }
-
-                    // Extract video ID from video element src, poster, or thumbnail img
-                    let videoId = null;
-                    if (hasVideo) {
-                        const videoEl = article.querySelector('video');
-                        const srcMatch    = (videoEl?.src    || '').match(/ext_tw_video\/(\d+)\//);
-                        const posterMatch = (videoEl?.poster || '').match(/ext_tw_video_thumb\/(\d+)\//);
-                        if (srcMatch)    videoId = srcMatch[1];
-                        else if (posterMatch) videoId = posterMatch[1];
-                        else {
-                            for (const img of article.querySelectorAll('img')) {
-                                const m = (img.src || '').match(/ext_tw_video_thumb\/(\d+)\//);
-                                if (m) { videoId = m[1]; break; }
-                            }
-                        }
-                    }
-
-                    // Collect unique image URLs (dedupe)
-                    const imageSet = new Set();
-                    article.querySelectorAll('[data-testid="tweetPhoto"] img').forEach(img => {
-                        if (img.src) imageSet.add(img.src);
-                    });
-
-                    // For video posts with no tweetPhoto images, grab the video poster/thumbnail.
-                    // Twitter puts the thumbnail as the <video poster="..."> attribute or as
-                    // a preview image inside the video player container.
-                    if (imageSet.size === 0 && hasVideo) {
-                        const videoEl = article.querySelector('video');
-                        if (videoEl?.poster) {
-                            imageSet.add(videoEl.poster);
-                        } else {
-                            const playerImgs = article.querySelectorAll('[data-testid="videoPlayer"] img, [data-testid="previewInterstitial"] img');
-                            playerImgs.forEach(img => { if (img.src) imageSet.add(img.src); });
-                        }
-                    }
-
-                    results.push({
-                        text:     tweetText,
-                        time:     timeEl.getAttribute('datetime'),
-                        isPinned,
-                        isReply,
-                        replyToHandle,
-                        hasVideo,
-                        videoId,
-                        images:   Array.from(imageSet)
-                    });
-                });
-                window.scrollBy(0, 800);
-                await new Promise(r => setTimeout(r, 1500));
-            }
-
-            // Deduplicate by time, sort newest first
-            const unique = results.filter((v, i, a) => a.findIndex(t => t.time === v.time) === i);
-            unique.sort((a, b) => new Date(b.time) - new Date(a.time));
-            // Filter out pinned, return up to maxTweets
-            const nonPinned = unique.filter(t => !t.isPinned);
-            return nonPinned.slice(0, maxTweets);
-        }, maxTweets);
-
-        // Wait for m3u8 manifests triggered during scrolling to arrive
-        log('[SCRAPE]', 'WAIT', 'Waiting for m3u8 manifests to settle (2s)...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        log('[SCRAPE]', 'SCRAPE', `${scrapeResult.length} non-pinned tweet(s) found in ${scrapeTimer()}`);
         scrapeResult.forEach((t, i) => {
             log(`  [${i}]`, 'ARTICLE',
                 `time=${t.time} | video=${t.hasVideo} | videoId=${t.videoId || 'none'} | ` +
@@ -428,216 +437,79 @@ async function getLatestTweets(username, maxTweets = 8) {
         });
 
         if (scrapeResult.length === 0) {
-            ghaError('No non-pinned tweets found after scraping');
+            ghaError('No tweets found');
             ghaEndGroup();
             console.log(JSON.stringify({ error: 'No tweets found' }));
             return;
         }
-
         ghaEndGroup();
 
-        // ── FLUSH BACKGROUND LOGS ────────────────────────────────────────────
-        if (m3u8Logs.length > 0) {
-            ghaGroup('[NETWORK] Network: M3U8 Manifests');
-            m3u8Logs.forEach(l => log(l.icon, l.tag, l.msg));
-            ghaEndGroup();
-        }
-
-        // ── Download images for ALL tweets ───────────────────────────────────
+        // Step 3: Download images for ALL tweets
         ghaGroup('[IMG] Image Download (all tweets)');
         for (let tweetIdx = 0; tweetIdx < scrapeResult.length; tweetIdx++) {
             const tweet = scrapeResult[tweetIdx];
             for (let imgIdx = 0; imgIdx < tweet.images.length; imgIdx++) {
                 const originalUrl = tweet.images[imgIdx];
-                let highResUrl;
-                if (originalUrl.includes('?')) {
-                    const [base, params] = originalUrl.split('?');
-                    const urlParams = new URLSearchParams(params);
-                    urlParams.set('name', 'orig');
-                    highResUrl = `${base}?${urlParams.toString()}`;
-                } else {
-                    highResUrl = `${originalUrl}?format=jpg&name=orig`;
-                }
+                const highResUrl = originalUrl.includes('?')
+                    ? originalUrl.replace(/\?[^?]+$/, '?format=jpg&name=orig')
+                    : `${originalUrl}?format=jpg&name=orig`;
 
                 const filename = `tweet_img_${tweetIdx}_${imgIdx}.jpg`;
                 log('[DOWNLOAD]', `IMG[t${tweetIdx}_${imgIdx}]`, highResUrl);
                 const imgTimer = timer();
                 try {
-                    const response = await page.goto(highResUrl, { waitUntil: 'networkidle0', timeout: 15000 });
-                    if (response && response.ok()) {
-                        const buffer = await response.buffer();
-                        fs.writeFileSync(filename, buffer);
-                        log('[OK]', `IMG[t${tweetIdx}_${imgIdx}]`, `Saved ${filename} — ${(buffer.length / 1024).toFixed(1)} KB in ${imgTimer()}`);
-                    } else {
-                        ghaError(`IMG[t${tweetIdx}_${imgIdx}]: HTTP ${response?.status()} — ${highResUrl}`);
-                    }
+                    await httpsGetBinary(highResUrl, filename);
+                    const size = (fs.statSync(filename).size / 1024).toFixed(1);
+                    log('[OK]', `IMG[t${tweetIdx}_${imgIdx}]`, `Saved ${filename} — ${size} KB in ${imgTimer()}`);
                 } catch (e) {
-                    ghaError(`IMG[t${tweetIdx}_${imgIdx}]: ${e.message} — ${highResUrl}`);
+                    ghaError(`IMG[t${tweetIdx}_${imgIdx}]: ${e.message}`);
                 }
             }
         }
         ghaEndGroup();
 
-        // ── Prepare m3u8 data for videos ─────────────────────────────────────
-        // For each tweet with video, find its m3u8 data
-        const videoManifests = {};
-        for (const tweet of scrapeResult) {
-            if (tweet.hasVideo && tweet.videoId) {
-                const manifests = m3u8Bodies.get(tweet.videoId) || [];
-                if (manifests.length > 0) {
-                    // Find master playlist
-                    const master = manifests.find(m => m.body.includes('#EXT-X-STREAM-INF')) || manifests[0];
-                    videoManifests[tweet.videoId] = {
-                        masterUrl: master.url,
-                        masterBody: master.body,
-                        // Also include all captured manifests for this videoId
-                        allManifests: manifests.map(m => ({ url: m.url, body: m.body }))
-                    };
-                    log('[INFO]', 'VIDEO', `Prepared m3u8 data for videoId=${tweet.videoId} (${manifests.length} manifest(s))`);
-                } else {
-                    log('[WARN]', 'VIDEO', `No m3u8 captured for videoId=${tweet.videoId}`);
-                }
-            }
-        }
-
-        // ── Download videos for ALL tweets that have videos ─────────────────────
+        // Step 4: Download videos for ALL tweets that have videos
+        ghaGroup('[VIDEO] Video Downloads');
         for (let tweetIdx = 0; tweetIdx < scrapeResult.length; tweetIdx++) {
             const tweet = scrapeResult[tweetIdx];
-            if (!tweet.hasVideo || !tweet.videoId) continue;
+            if (!tweet.hasVideo) continue;
 
-            const manifestData = videoManifests[tweet.videoId];
-            if (!manifestData) {
-                log('[WARN]', 'VIDEO', `Skipping video download for tweet ${tweetIdx}: no manifest data`);
-                continue;
+            const videoOutPath = `tweet_video_${tweetIdx}.mp4`;
+
+            if (tweet.videoUrl) {
+                // Direct MP4 download (from GraphQL API)
+                log('[DOWNLOAD]', 'VIDEO', `Downloading direct MP4: ${tweet.videoUrl}`);
+                const videoTimer = timer();
+                try {
+                    await httpsGetBinary(tweet.videoUrl, videoOutPath);
+                    const size = (fs.statSync(videoOutPath).size / 1024).toFixed(1);
+                    log('[OK]', 'VIDEO', `Saved ${videoOutPath} — ${size} KB in ${videoTimer()}`);
+                    tweet.videoPath = videoOutPath;
+                } catch (e) {
+                    ghaError(`Video download failed for tweet ${tweetIdx}: ${e.message}`);
+                }
+            } else {
+                // Try HLS download (fallback — need m3u8 manifest from network interception)
+                log('[WARN]', 'VIDEO', `No direct video URL for tweet ${tweetIdx} — skipping video download`);
             }
+        }
+        ghaEndGroup();
 
-            ghaGroup(`[VIDEO] Video Download for tweet ${tweetIdx} (videoId=${tweet.videoId})`);
-            const videoTimer = timer();
-
-            try {
-                // Parse master playlist — find highest bandwidth child playlist
-                const streams = parseMasterPlaylist(manifestData.masterBody, manifestData.masterUrl);
-                log('[INFO]', 'VIDEO', `Streams: ${streams.map(s => `${s.resolution}@${s.bandwidth}`).join(', ') || 'none'}`);
-
-                if (streams.length === 0) {
-                    ghaWarning('No streams found in master playlist');
-                    ghaEndGroup();
-                    continue;
-                }
-
-                // Child playlist URLs are signed/tokenized so they don't require auth cookies —
-                // plain https.get() works fine.
-                // Use cache if Chrome already fetched it, otherwise fetch directly.
-                streams.sort((a, b) => b.bandwidth - a.bandwidth);
-                const bestStream = streams[0];
-                log('[BEST]', 'VIDEO', `Best stream: ${bestStream.resolution} @ ${bestStream.bandwidth} bps → ${bestStream.url}`);
-
-                // Fetch child playlist
-                let childBody;
-                const cachedChild = manifestData.allManifests.find(m => m.url === bestStream.url);
-                if (cachedChild) {
-                    log('[OK]', 'VIDEO', 'Child playlist found in cache');
-                    childBody = cachedChild.body;
-                } else {
-                    log('[DOWNLOAD]', 'VIDEO', `Fetching child playlist via https: ${bestStream.url}`);
-                    childBody = await downloadPlaylist(bestStream.url);
-                }
-
-                log('[MANIFEST]', 'VIDEO', `Child playlist body:\n${childBody}`);
-
-                // Compute total video duration from #EXTINF tags
-                const totalDuration = (childBody || '').split('\n')
-                    .map(l => l.trim())
-                    .filter(l => l.startsWith('#EXTINF:'))
-                    .reduce((sum, l) => sum + parseFloat(l.replace('#EXTINF:', '').replace(',', '')), 0);
-                log('[TIME]', 'VIDEO', `Video duration: ${totalDuration.toFixed(2)}s`);
-
-                if (totalDuration <= 10) {
-                    log('[INFO]', 'VIDEO', `Duration ≤10s — skipping video download, thumbnail will be used instead`);
-                    ghaEndGroup();
-                    continue;
-                }
-
-                // Parse child playlist for segments
-                const childParsed = parseChildPlaylist(childBody);
-                const videoBaseUrl = bestStream.url.substring(0, bestStream.url.lastIndexOf('/') + 1);
-
-                // Download video segments
-                log('[DOWNLOAD]', 'VIDEO', 'Downloading video track...');
-                const videoBuffer = await downloadSegments(videoBaseUrl, childParsed, 'VID');
-                const videoRawPath = `tweet_video_${tweetIdx}_raw.mp4`;
-                fs.writeFileSync(videoRawPath, videoBuffer);
-                log('[OK]', 'VIDEO', `Raw video: ${(videoBuffer.length / 1024).toFixed(1)} KB`);
-
-                // Find audio groups in master playlist
-                const audioGroups = [];
-                for (const match of manifestData.masterBody.matchAll(/GROUP-ID="audio-(\d+)",AUTOSELECT=YES,URI="([^"]+)"/g)) {
-                    audioGroups.push({ bitrate: parseInt(match[1]), uri: match[2] });
-                }
-                audioGroups.sort((a, b) => b.bitrate - a.bitrate);
-                log('[INFO]', 'AUDIO', `Audio groups: ${audioGroups.map(g => g.bitrate).join(', ')} bps`);
-
-                let audioBuffer = null;
-                if (audioGroups.length > 0) {
-                    const audioUri = audioGroups[0].uri;
-                    const audioPlaylistUrl = audioUri.startsWith('https://') ? audioUri : `https://video.twimg.com${audioUri}`;
-                    log('[DOWNLOAD]', 'AUDIO', `Playlist (${audioGroups[0].bitrate} bps): ${audioPlaylistUrl}`);
-                    const cachedAudio = manifestData.allManifests.find(m => m.url === audioPlaylistUrl);
-                    const audioBody = cachedAudio ? cachedAudio.body : await downloadPlaylist(audioPlaylistUrl);
-                    log('[INFO]', 'AUDIO', cachedAudio ? 'Using cached playlist' : 'Fetched playlist');
-                    audioBuffer = await downloadSegments(audioPlaylistUrl.substring(0, audioPlaylistUrl.lastIndexOf('/') + 1), parseChildPlaylist(audioBody), 'AUD');
-                    fs.writeFileSync(`tweet_audio_${tweetIdx}_raw.mp4`, audioBuffer);
-                    log('[OK]', 'AUDIO', `Raw audio: ${(audioBuffer.length / 1024).toFixed(1)} KB`);
-                } else {
-                    ghaWarning('No audio groups — using video-only');
-                }
-
-                // Mux with ffmpeg
-                log('[FFMPEG]', 'FFMPEG', 'Muxing...');
-                const videoOutPath = `tweet_video_${tweetIdx}.mp4`;
-                await muxVideo(
-                    videoRawPath,
-                    audioBuffer ? `tweet_audio_${tweetIdx}_raw.mp4` : videoRawPath,
-                    videoOutPath
-                );
-
-                // Cleanup raw files
-                fs.unlinkSync(videoRawPath);
-                if (audioBuffer) fs.unlinkSync(`tweet_audio_${tweetIdx}_raw.mp4`);
-
-                const finalSize = (fs.statSync(videoOutPath).size / 1024).toFixed(1);
-                log('[OK]', 'VIDEO', `Saved ${videoOutPath} — ${finalSize} KB in ${videoTimer()}`);
-
-                // Store video path and resolution in tweet object
-                tweet.videoPath = videoOutPath;
-                const resParts = bestStream.resolution.split('x');
-                if (resParts.length === 2) {
-                    tweet.videoWidth = parseInt(resParts[0]);
-                    tweet.videoHeight = parseInt(resParts[1]);
-                    log('[DIMS]', 'VIDEO', `Resolution: ${tweet.videoWidth}x${tweet.videoHeight}`);
-                }
-
-            } catch (e) {
-                ghaError(`Video download/mux failed for tweet ${tweetIdx}: ${e.message}`);
-                // Cleanup on error
-                for (const f of [`tweet_video_${tweetIdx}_raw.mp4`, `tweet_audio_${tweetIdx}_raw.mp4`]) {
-                    try { fs.unlinkSync(f); } catch {}
-                }
-            }
-            ghaEndGroup();
+        // Clean up videoUrl from output (bot.py doesn't need it)
+        for (const tweet of scrapeResult) {
+            delete tweet.videoUrl;
         }
 
         // ── Summary ──────────────────────────────────────────────────────────
         ghaGroup('[SUMMARY] Run Summary');
         log('[TIME]', 'TIMING', `Total elapsed: ${totalTimer()}`);
-        log('[NETWORK]', 'NETWORK', `${reqTotal} responses, ${reqFailed} failed`);
         log('[TWEETS]', 'TWEETS', `${scrapeResult.length} tweet(s) returned`);
         ghaEndGroup();
 
-        // Return array of tweets with metadata + video manifests
+        // Return array of tweets with metadata
         const output = {
             tweets: scrapeResult,
-            videoManifests
+            videoManifests: {},
         };
         console.log(JSON.stringify(output));
 
@@ -645,19 +517,7 @@ async function getLatestTweets(username, maxTweets = 8) {
         ghaError(`Unhandled exception: ${error.message}`);
         log('[FATAL]', 'FATAL', error.stack || error.message);
         console.error(`{"error": "${error.message.replace(/"/g, '\\"')}"}`);
-    } finally {
-        // Race browser.close against a short deadline so the process always exits cleanly.
-        try {
-            await Promise.race([
-                browser.close(),
-                new Promise(resolve => setTimeout(resolve, 6000))
-            ]);
-        } catch (e) {
-            log('[WARN]', 'BROWSER', `Error during close: ${e.message}`);
-        }
-        log('[DONE]', 'DONE', `Browser closed — total: ${totalTimer()}`);
-        // Force-exit in case lingering async response listeners are keeping the event loop alive after the browser is gone.
-        process.exit(0);
+        process.exit(1);
     }
 }
 
