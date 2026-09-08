@@ -48,6 +48,7 @@ temp_manga.jpg
 Thumbs.db
 
 # Project specific
+opencode.json
 
 # Test files
 test_*.py
