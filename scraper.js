@@ -440,8 +440,10 @@ function parseTweetEntry(entry) {
             text = text.split(u.url).join(display);
         }
     }
-    // Clean up extra spaces left by stripping media t.co, and any remaining bare t.co
-    text = text.replace(/https?:\/\/t\.co\/\S+/g, '').replace(/\s{2,}/g, ' ').trim();
+    // Clean up remaining bare t.co and collapse spaces but preserve original newlines (\n, \n\n)
+    text = text.replace(/https?:\/\/t\.co\/\S+/g, '');
+    text = text.replace(/ +\n/g, '\n').replace(/[ \t]{2,}/g, ' ');
+    text = text.replace(/\n{3,}/g, '\n\n').trim();
 
     // Extract timestamp
     const time = legacy.created_at ? new Date(legacy.created_at).toISOString() : null;
