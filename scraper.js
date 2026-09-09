@@ -421,8 +421,27 @@ function parseTweetEntry(entry) {
     // Check if it's a retweet — skip those
     if (legacy.retweeted_status_result) return null;
 
-    // Extract text
-    const text = legacy.full_text || '';
+    // Extract text — replicate Puppeteer display: strip all t.co, use truncated display_url (28 inc "...")
+    let text = legacy.full_text || '';
+    const mediaUrls = new Set((legacy.extended_entities?.media || []).map(m => m.url));
+    const urlEntities = legacy.entities?.urls || [];
+    for (const u of urlEntities) {
+        if (mediaUrls.has(u.url)) {
+            // Media card t.co — strip entirely (video/photo card not in tweetText)
+            text = text.split(u.url).join('');
+        } else {
+            // Content link t.co — replace with truncated display_url (Twitter truncates at 28 inc "...")
+            let display = u.display_url || u.expanded_url || '';
+            // display_url already truncated by X, but enforce 28 inc "..." to match web
+            if (display.length > 28) display = display.slice(0, 25) + '...';
+            // Remove https:// for display to match Puppeteer innerText (fate-go.us/... not https://...)
+            display = display.replace(/^https?:\/\//, '');
+            if (display.length > 28) display = display.slice(0, 25) + '...';
+            text = text.split(u.url).join(display);
+        }
+    }
+    // Clean up extra spaces left by stripping media t.co, and any remaining bare t.co
+    text = text.replace(/https?:\/\/t\.co\/\S+/g, '').replace(/\s{2,}/g, ' ').trim();
 
     // Extract timestamp
     const time = legacy.created_at ? new Date(legacy.created_at).toISOString() : null;
