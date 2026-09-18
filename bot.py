@@ -502,8 +502,8 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
                     uri = f'https://{uri}'
 
                 display_item = item
-                if len(display_item) > 30:
-                    display_item = display_item[:27] + "..."
+                if len(display_item) > 28:
+                    display_item = display_item[:25] + "..."
 
                 if uri.endswith(('.', ',', '!', '?')):
                     punctuation = uri[-1]

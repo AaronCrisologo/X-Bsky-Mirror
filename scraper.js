@@ -430,14 +430,9 @@ function parseTweetEntry(entry) {
             // Media card t.co — strip entirely (video/photo card not in tweetText)
             text = text.split(u.url).join('');
         } else {
-            // Content link t.co — replace with truncated display_url (Twitter truncates at 28 inc "...")
-            let display = u.display_url || u.expanded_url || '';
-            // display_url already truncated by X, but enforce 28 inc "..." to match web
-            if (display.length > 28) display = display.slice(0, 25) + '...';
-            // Remove https:// for display to match Puppeteer innerText (fate-go.us/... not https://...)
-            display = display.replace(/^https?:\/\//, '');
-            if (display.length > 28) display = display.slice(0, 25) + '...';
-            text = text.split(u.url).join(display);
+            // Content link t.co — replace with full expanded URL without https (bot will truncate display to 28 for facets, href stays full)
+            let full = (u.expanded_url || u.display_url || '').replace(/^https?:\/\//, '');
+            text = text.split(u.url).join(full);
         }
     }
     // Clean up remaining bare t.co and collapse spaces but preserve original newlines (\n, \n\n)
