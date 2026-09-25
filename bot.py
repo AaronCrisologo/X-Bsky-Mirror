@@ -405,7 +405,19 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
                 )
                 log("[OK]", "REPLY", f"Found parent post via text match: {parent_uri}")
             else:
-                log("[WARN]", "REPLY", "Parent post not found — posting as standalone")
+                log("[WARN]", "REPLY", "Parent post not found — skipping reply (no parent to thread under)")
+                # Cleanup any downloaded media for this tweet before skipping
+                for _img_idx in range(len(tweet_data.get('images', []))):
+                    _f = f"tweet_img_{tweet_index}_{_img_idx}.jpg"
+                    if os.path.exists(_f):
+                        os.remove(_f)
+                _vf = f"tweet_video_{tweet_index}.mp4"
+                if os.path.exists(_vf):
+                    os.remove(_vf)
+                for _rf in [f"tweet_video_{tweet_index}_raw.mp4", f"tweet_audio_{tweet_index}_raw.mp4"]:
+                    if os.path.exists(_rf):
+                        os.remove(_rf)
+                return False, "parent_not_found", None
 
     try:
         image_urls = tweet_data.get('images', [])
@@ -701,7 +713,7 @@ def main():
                 last_posted_ref = posted_ref
             log("[OK]", "MAIN", f"Successfully posted tweet {tweet_index+1}/{len(tweets)}")
         else:
-            if reason not in ("duplicate", "too_old", "no_timestamp", "empty_text", "skipped_bare_link"):
+            if reason not in ("duplicate", "too_old", "no_timestamp", "empty_text", "skipped_bare_link", "parent_not_found"):
                 skipped_count += 1
             log("[SKIP]", "MAIN", f"Tweet {tweet_index+1}/{len(tweets)} skipped: {reason}")
 
