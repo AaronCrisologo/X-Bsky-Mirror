@@ -49,6 +49,7 @@ Thumbs.db
 
 # Project specific
 opencode.json
+AGENTS.md
 
 # Test files
 test_*.py

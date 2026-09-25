@@ -204,8 +204,8 @@ def _normalize_for_dedup(text):
 
 def is_already_posted(client, new_text):
     try:
-        log("[CHECK]", "DEDUP", "Checking last 8 posts in Bluesky feed...")
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=8, filter='posts_with_replies')
+        log("[CHECK]", "DEDUP", "Checking last 16 posts in Bluesky feed...")
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=16, filter='posts_with_replies')
 
         new_text_clean = _normalize_for_dedup(new_text.strip().lower())
         log("  →", "DEDUP", f"New (normalized):      {new_text_clean[:100]}")
@@ -237,11 +237,11 @@ def find_parent_post(client, parent_text_hint):
     """
     Search recent Bluesky posts for one matching the parent tweet text.
     Returns (uri, cid) or (None, None) if not found.
-    Stateless — uses text matching against the last 8 posts (with replies).
+    Stateless — uses text matching against the last 16 posts (with replies).
     """
     try:
         log("[LOOKUP]", "REPLY", f"Searching for parent post matching text hint...")
-        response = client.get_author_feed(actor=BSKY_HANDLE, limit=8, filter='posts_with_replies')
+        response = client.get_author_feed(actor=BSKY_HANDLE, limit=16, filter='posts_with_replies')
 
         normalized_hint = _normalize_for_dedup(parent_text_hint.strip().lower())
 
@@ -256,7 +256,7 @@ def find_parent_post(client, parent_text_hint):
                 log("[OK]", "REPLY", f"Partial match (first 100 chars) on post #{i+1} — {view.post.uri}")
                 return view.post.uri, view.post.cid
 
-        log("[WARN]", "REPLY", "No matching parent post found in last 8 posts")
+        log("[WARN]", "REPLY", "No matching parent post found in last 16 posts")
         return None, None
 
     except Exception as e:
