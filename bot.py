@@ -11,6 +11,7 @@ import os
 import re
 import urllib.request
 from html.parser import HTMLParser
+import html
 from PIL import Image
 
 # ─── GitHub Actions logging helpers ───────────────────────────────────────────
@@ -325,6 +326,7 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
     Returns (success, reason, posted_ref) where posted_ref is (uri, cid) if posted, else None.
     """
     raw_text = tweet_data.get('text', '')
+    raw_text = html.unescape(raw_text)
     post_text = "\n".join([line.strip() for line in raw_text.splitlines()]).strip()
 
     if post_text:

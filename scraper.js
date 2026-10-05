@@ -154,6 +154,19 @@ function httpsGetBinary(url, destPath, headers) {
     });
 }
 
+// ─── Helper: Decode HTML entities (GraphQL legacy.full_text is escaped) ───────
+
+function decodeHTMLEntities(str) {
+    return str
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#x27;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'");
+}
+
 // ─── Helper: Download HLS playlist ────────────────────────────────────────────
 
 function downloadPlaylist(url) {
@@ -437,6 +450,7 @@ function parseTweetEntry(entry) {
     }
     // Clean up remaining bare t.co and collapse spaces but preserve original newlines (\n, \n\n)
     text = text.replace(/https?:\/\/t\.co\/\S+/g, '');
+    text = decodeHTMLEntities(text);
     text = text.replace(/ +\n/g, '\n').replace(/[ \t]{2,}/g, ' ');
     text = text.replace(/\n{3,}/g, '\n\n').trim();
 
