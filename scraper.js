@@ -85,4 +85,8 @@ async function getLatestTweets(username, maxTweets = 8) {
     }
 }
 
-getLatestTweets('FateGO_USA', 8);
+// Config via env
+const TARGET_ACCOUNT = process.env.TARGET_ACCOUNT;
+const MAX_TWEETS = parseInt(process.env.MAX_TWEETS, 10) || 8;
+
+getLatestTweets(TARGET_ACCOUNT, MAX_TWEETS);

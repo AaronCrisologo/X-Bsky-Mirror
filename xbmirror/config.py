@@ -1,9 +1,17 @@
 import os
 
-# ─── CONFIGURATION ────────────────────────────────────────────────────────────
+# ─── CONFIGURATION (override via env vars; defaults below apply) ──────────────
 BSKY_HANDLE = os.getenv("BSKY_USER")
 BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
 
-FETCH_TIMEOUT = 180  # Max seconds to wait for scraper (increased for multiple tweets)
 
-SIMULATION_MODE = False  # Set to True to test without running X scraper
+def _int_env(name, default):
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+FETCH_TIMEOUT = _int_env("FETCH_TIMEOUT", 180)  # Max seconds to wait for scraper
+
+SIMULATION_MODE = os.getenv("SIMULATION_MODE", "").strip().lower() in ("1", "true", "yes")
