@@ -404,11 +404,30 @@ async function getUserTweets(userId, ct0, count = 8) {
     const instructions = data?.data?.user?.result?.timeline?.timeline?.instructions || [];
 
     const tweets = [];
+    const seenIds = new Set();
     for (const instruction of instructions) {
         const entries = instruction.entries || [];
         for (const entry of entries) {
             const tweet = parseTweetEntry(entry);
-            if (tweet) tweets.push(tweet);
+            if (tweet) {
+                if (tweet.tweetId && seenIds.has(tweet.tweetId)) continue;
+                if (tweet.tweetId) seenIds.add(tweet.tweetId);
+                tweets.push(tweet);
+                continue;
+            }
+            // Handle conversation modules (threads) — entry.content.items[]
+            if (entry?.content?.entryType === 'TimelineTimelineModule') {
+                const items = entry.content.items || [];
+                for (const item of items) {
+                    const innerEntry = { content: item.item || item };
+                    const t = parseTweetEntry(innerEntry);
+                    if (t) {
+                        if (t.tweetId && seenIds.has(t.tweetId)) continue;
+                        if (t.tweetId) seenIds.add(t.tweetId);
+                        tweets.push(t);
+                    }
+                }
+            }
         }
     }
 
