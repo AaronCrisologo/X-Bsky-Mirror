@@ -11,13 +11,14 @@ No Puppeteer. No headless Chrome. No ffmpeg. Just `https` in Node and `atproto` 
 - **Scrapes tweets** from a target X account using the internal GraphQL API (no browser required)
 - **Downloads media** — high-res images (`?name=orig`) and direct MP4 videos (highest bitrate variant)
 - **Auto-heals query IDs** — refreshes Twitter GraphQL query IDs at runtime from a community source or by scraping x.com JS bundles, so it keeps working when Twitter rotates them
-- **Deduplicates** — checks the last 16 Bluesky posts (normalized text comparison) to avoid reposting
-- **Thread support** — detects replies and threads them under the correct parent post on Bluesky
+- **Deduplicates** — checks the last 16 Bluesky posts (normalized text: URLs and ellipsis stripped); partial match on first 100 chars also triggers skip
+- **Thread support** — parses `TimelineTimelineModule` entries (Twitter's thread container), deduplicates by tweet ID, and threads follow-up replies under the main post via `last_posted_ref`
+- **Reply threading** — stateless text-match parent lookup in recent Bluesky posts, with a fast-path for same-run chains
 - **Rich formatting** — builds link facets for URLs and hashtags, attaches OpenGraph link cards for text-only posts
-- **Image compression** — binary-search JPEG compression to stay under Bluesky's 2 MB blob limit
-- **Bare-link filtering** — skips "More info →" link-only posts that have no real content
+- **Image compression** — quality reduction → resize to stay under Bluesky's 1.9 MB blob limit
+- **Bare-link filtering** — skips "More info →" link-only posts that have no real content (replies are exempt so thread parts still post)
 - **Fallback images** — uses a local placeholder image when a tweet has no media
-- **Designed for GitHub Actions** — structured logging with collapsible `::group::` sections
+- **Designed for GitHub Actions** — structured logging with collapsible `::group::` sections (all logs to stderr, only JSON to stdout)
 
 ---
 
@@ -56,6 +57,20 @@ You need two cookies from an authenticated X/Twitter session:
    ```
 4. **Enable Actions** on your fork: Actions tab → "I understand my workflows, go ahead and enable them"
 5. **Trigger it** via cron-job.org (see [Scheduling](#-scheduling)) or manually: Actions tab → "X-Bsky-Mirror Bot" → "Run workflow"
+
+---
+
+## Running Locally
+
+```bash
+# Python deps (no requirements.txt — install manually)
+pip install atproto Pillow requests
+
+# Node deps: none (scraper uses only Node built-ins)
+
+# Set env vars (see Configuration below), then:
+python bot.py
+```
 
 ---
 
@@ -156,12 +171,24 @@ getLatestTweets('[X_Account_Handle]', 8);  // username, maxTweets
 
 ### Query IDs (`lib/config.js`)
 
-Query IDs are refreshed at runtime from [twitter-openapi](https://github.com/fa0311/twitter-openapi) or by scraping x.com JS bundles. Hardcoded fallbacks are only used if both fail. You can override via env vars:
+Query IDs are refreshed at runtime. Priority order:
+
+1. `X_QUERY_ID_*` env vars (if set — these win over everything)
+2. [twitter-openapi](https://github.com/fa0311/twitter-openapi) remote fetch (~1s)
+3. x.com JS bundle scrape (fallback)
+4. Hardcoded fallback IDs
 
 | Env Var | Operation |
 |---------|-----------|
 | `X_QUERY_ID_USER_BY_SCREEN_NAME` | `UserByScreenName` |
 | `X_QUERY_ID_USER_TWEETS` | `UserTweets` |
+
+### Tunable Timeouts (`lib/http.js`)
+
+| What | Default |
+|------|---------|
+| `httpsGet` (JSON requests) | 30 s |
+| `httpsGetBinary` (file downloads) | 60 s |
 
 ---
 
@@ -184,6 +211,7 @@ The scraper outputs a single JSON object to **stdout**:
       "videoUrl": "https://video.twimg.com/.../vid.mp4",
       "videoWidth": 1280,
       "videoHeight": 720,
+      "videoPath": "tweet_video_0.mp4",
       "images": ["https://pbs.twimg.com/media/xxx.jpg"],
       "tweetId": "1234567890123456789"
     }
@@ -205,6 +233,7 @@ The scraper outputs a single JSON object to **stdout**:
 | `hasVideo` | Whether tweet has video/GIF |
 | `videoId` | Twitter video ID |
 | `videoUrl` | Direct MP4 URL (highest bitrate) |
+| `videoPath` | Local path to downloaded MP4 (added by `media.js` after download) |
 | `videoWidth` / `videoHeight` | Video resolution from `original_info` |
 | `images` | Array of image URLs |
 | `tweetId` | Tweet status ID |
@@ -248,3 +277,25 @@ The scraper outputs a single JSON object to **stdout**:
 - Check stderr for timestamped logs with `[INFO]`, `[OK]`, `[ERROR]`, `[WARN]` tags
 - In GitHub Actions, logs include `::group::` annotations for collapsible sections
 - Set `SIMULATION_MODE = True` in `xbmirror/config.py` to test without X cookies
+
+---
+
+## Key Behaviors
+
+- **Processing order**: Tweets are processed oldest-to-newest (reversed from scraper output), so threads post in the right order
+- **Age filter**: Tweets older than 2 days are skipped
+- **Media priority**: Video file > tweet images (including video thumbnails) > local fallback image
+- **Dedup normalization**: URLs, ellipsis (`...`), and extra whitespace are stripped before comparison so truncated reposts are caught
+- **Bare-link filter exemption**: Replies are exempt from the "More info" filter so threaded parts like `More info ➡️` still post
+- **Auto-heal priority**: `X_QUERY_ID_*` env vars → twitter-openapi remote fetch → x.com bundle scrape → hardcoded fallback
+- **Query ID self-healing**: If Twitter rotates GraphQL query IDs, the scraper fetches fresh ones from [twitter-openapi](https://github.com/fa0311/twitter-openapi) (~1s) or scrapes them from x.com JS bundles before making API calls
+
+---
+
+## Gotchas
+
+- `bot.py` must be run from the repo root — all file paths are relative
+- The scraper writes images/videos to the current working directory as `tweet_img_{t}_{i}.jpg` / `tweet_video_{t}.mp4`; `bot.py` reads and deletes them after posting
+- No npm dependencies, no `package.json` — the scraper uses only Node built-ins (`https`, `fs`, `url`), so there's no `npm install` step in the workflow
+- No lint, typecheck, or test suite — validate changes by reading the code carefully
+- Reply threading is stateless: if a parent tweet was never mirrored, the reply is skipped (no state file to fall back on)
