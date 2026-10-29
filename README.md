@@ -1,12 +1,12 @@
-# X-Bsky-Mirror
+# 🐦 X-Bsky-Mirror
 
-A lightweight scraper + bot that fetches tweets from X (Twitter) via the internal GraphQL API, downloads attached media (images, videos), and reposts everything to Bluesky — **designed to run on GitHub Actions**.
+> Mirror tweets from X (Twitter) to Bluesky automatically — no browser, no Puppeteer, no ffmpeg.
 
-No Puppeteer. No headless Chrome. No ffmpeg. Just `https` in Node and `atproto` in Python.
+A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, downloads attached media, and reposts everything to Bluesky — **designed to run on GitHub Actions**.
 
 ---
 
-## What This Does
+## ✨ Features
 
 - **Scrapes tweets** from a target X account using the internal GraphQL API (no browser required)
 - **Downloads media** — high-res images (`?name=orig`) and direct MP4 videos (highest bitrate variant)
@@ -22,7 +22,7 @@ No Puppeteer. No headless Chrome. No ffmpeg. Just `https` in Node and `atproto` 
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Authentication (Required)
 
@@ -56,11 +56,11 @@ You need two cookies from an authenticated X/Twitter session:
    getLatestTweets('YOUR_TARGET_HANDLE', 8);  // change handle & max tweets
    ```
 4. **Enable Actions** on your fork: Actions tab → "I understand my workflows, go ahead and enable them"
-5. **Trigger it** via cron-job.org (see [Scheduling](#-scheduling)) or manually: Actions tab → "X-Bsky-Mirror Bot" → "Run workflow"
+5. **Trigger it** via cron-job.org (see [Scheduling](#scheduling)) or manually: Actions tab → "X-Bsky-Mirror Bot" → "Run workflow"
 
 ---
 
-## Running Locally
+## 💻 Running Locally
 
 ```bash
 # Python deps (no requirements.txt — install manually)
@@ -74,7 +74,7 @@ python bot.py
 
 ---
 
-## How It Works
+## 🏗️ How It Works
 
 | Component | Role |
 |-----------|------|
@@ -112,7 +112,7 @@ bot.py (Python)
 
 ---
 
-## Scheduling
+## ⏰ Scheduling
 
 This project is designed to run on **GitHub Actions**.
 
@@ -148,7 +148,7 @@ on:
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 ### Target account (`scraper.js`)
 
@@ -192,7 +192,7 @@ Query IDs are refreshed at runtime. Priority order:
 
 ---
 
-## Output Format
+## 📤 Output Format
 
 The scraper outputs a single JSON object to **stdout**:
 
@@ -240,7 +240,7 @@ The scraper outputs a single JSON object to **stdout**:
 
 ---
 
-## Dependencies
+## 📦 Dependencies
 
 | Package | Language | Purpose |
 |---------|----------|---------|
@@ -251,7 +251,7 @@ The scraper outputs a single JSON object to **stdout**:
 
 ---
 
-## Security Notes
+## 🔒 Security Notes
 
 - **Never commit** `X_AUTH_TOKEN` or `X_CT0` to git (they're in `.gitignore`)
 - Rotate cookies periodically — they expire
@@ -260,7 +260,7 @@ The scraper outputs a single JSON object to **stdout**:
 
 ---
 
-## Troubleshooting
+## 🐛 Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
@@ -280,7 +280,7 @@ The scraper outputs a single JSON object to **stdout**:
 
 ---
 
-## Key Behaviors
+## 📌 Key Behaviors
 
 - **Processing order**: Tweets are processed oldest-to-newest (reversed from scraper output), so threads post in the right order
 - **Age filter**: Tweets older than 2 days are skipped
@@ -292,10 +292,28 @@ The scraper outputs a single JSON object to **stdout**:
 
 ---
 
-## Gotchas
+## ⚠️ Gotchas
 
 - `bot.py` must be run from the repo root — all file paths are relative
 - The scraper writes images/videos to the current working directory as `tweet_img_{t}_{i}.jpg` / `tweet_video_{t}.mp4`; `bot.py` reads and deletes them after posting
 - No npm dependencies, no `package.json` — the scraper uses only Node built-ins (`https`, `fs`, `url`), so there's no `npm install` step in the workflow
 - No lint, typecheck, or test suite — validate changes by reading the code carefully
 - Reply threading is stateless: if a parent tweet was never mirrored, the reply is skipped (no state file to fall back on)
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE) for details.
+
+### Third-Party Attribution
+
+This project uses [twitter-openapi](https://github.com/fa0311/twitter-openapi) by [yuki](https://yuki0311.com/) as a runtime data source for GraphQL query ID auto-healing. It is subject to its own license, which includes an additional clause restricting use for spam-related activity (mass messaging, artificial engagement, automated disruption, or distribution of false information). See the [twitter-openapi LICENSE](https://github.com/fa0311/twitter-openapi/blob/main/LICENSE) for full terms.
+
+### Dependencies
+
+| Package | License | Author |
+|---|---|---|
+| [atproto](https://github.com/MarshalX/atproto) | MIT | [Ilya (Marshal)](https://atproto.blue) |
+| [Pillow](https://github.com/python-pillow/Pillow) | MIT-CMU | [Jeffrey "Alex" Clark](https://python-pillow.org) and contributors |
+| [requests](https://github.com/psf/requests) | Apache 2.0 | [Kenneth Reitz](https://kennethreitz.org) and the [PSF](https://www.python.org/psf/) |
