@@ -61,6 +61,7 @@ def main():
             return datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
 
     tweets_with_idx = sorted([(t, i) for i, t in enumerate(tweets)], key=_tweet_sort_key)
+    tweet_text_by_id = {t.get('tweetId'): t.get('text', '') for t in tweets if t.get('tweetId')}
 
     posted_count = 0
     skipped_count = 0
@@ -73,7 +74,7 @@ def main():
 
         log("[PROCESS]", "MAIN", f"=== Processing tweet {tweet_index+1}/{len(tweets)} (original index {original_index}) ===")
 
-        success, reason, posted_ref = process_tweet(client, tweet_data, original_index, len(tweets), last_posted_ref, prev_posted_tweet_id)
+        success, reason, posted_ref = process_tweet(client, tweet_data, original_index, len(tweets), last_posted_ref, prev_posted_tweet_id, tweet_text_by_id)
 
         if success:
             posted_count += 1

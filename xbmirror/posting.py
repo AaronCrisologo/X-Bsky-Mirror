@@ -14,7 +14,7 @@ from .images import compress_image_if_needed
 from .log import gha_error, gha_notice, gha_warning, log
 
 
-def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref=None, prev_posted_tweet_id=None):
+def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref=None, prev_posted_tweet_id=None, parent_text_map=None):
     """Process a single tweet: check dedup, download media, post to Bluesky, cleanup.
     Returns (success, reason, posted_ref) where posted_ref is (uri, cid) if posted, else None.
     """
@@ -95,8 +95,13 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
         else:
             if last_posted_ref:
                 log("[INFO]", "REPLY", "Last posted tweet is not this tweet's parent — falling back to text match")
-            # Fall back to text matching against recent Bluesky posts
-            parent_uri, parent_cid = find_parent_post(client, post_text)
+            # Use the PARENT tweet's text (from the same scrape) as the hint when available,
+            # so we can find an existing parent post from an earlier run. The reply's own
+            # text can never match its parent.
+            parent_hint = (parent_text_map or {}).get(parent_tweet_id) if parent_tweet_id else None
+            if parent_hint:
+                parent_hint = html.unescape(parent_hint)
+            parent_uri, parent_cid = find_parent_post(client, parent_hint if parent_hint else post_text)
             if parent_uri and parent_cid:
                 reply_ref = models.AppBskyFeedPost.ReplyRef(
                     parent=models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid),
