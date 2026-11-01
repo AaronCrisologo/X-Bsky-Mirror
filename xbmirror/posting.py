@@ -13,6 +13,17 @@ from .images import compress_image_if_needed
 from .log import gha_error, gha_notice, gha_warning, log
 
 
+# URL alternatives: full URLs, www-prefixed, dotted subdomains, and bare domains
+# (the scraper expands t.co links to full URLs WITHOUT the https:// scheme).
+_URL_ALTS = (
+    r'(?:https?://\S+|www\.\S+'
+    r'|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?(?=[^a-zA-Z0-9/_-]|$)'
+    r'|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?(?=[^a-zA-Z0-9/_-]|$))'
+)
+FACET_PATTERN = re.compile(r'(' + _URL_ALTS + r'|#\w+)')
+URL_PATTERN = re.compile(_URL_ALTS)
+
+
 def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref=None, prev_posted_tweet_id=None, parent_text_map=None):
     """Process a single tweet: check dedup, download media, post to Bluesky, cleanup.
     Returns (success, reason, posted_ref) where posted_ref is (uri, cid) if posted, else None.
@@ -167,10 +178,8 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
 
         # Build Rich Text with Facets
         post_text_with_facets = client_utils.TextBuilder()
-        pattern = re.compile(r'(https?://\S+|www\.\S+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?(?=[^a-zA-Z0-9/_-]|$)|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/\S*)?(?=[^a-zA-Z0-9/_-]|$)|#\w+)')
         last_idx = 0
-
-        for match in pattern.finditer(display_text):
+        for match in FACET_PATTERN.finditer(display_text):
             start, end = match.span()
             post_text_with_facets.text(display_text[last_idx:start])
 
@@ -241,9 +250,11 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
             else:
                 # Text-only post — try to attach a link card for the first URL
                 link_embed = None
-                url_match = re.search(r'https?://\S+|www\.\S+', display_text)
+                url_match = URL_PATTERN.search(display_text)
                 if url_match:
                     first_url = url_match.group()
+                    # Strip truncation artifacts before building the card URL
+                    first_url = first_url.replace('...', '').replace('…', '')
                     if not first_url.startswith('http'):
                         first_url = f'https://{first_url}'
                     # Strip trailing punctuation that crept in
