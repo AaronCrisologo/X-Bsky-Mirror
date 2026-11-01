@@ -9,7 +9,6 @@ from PIL import Image
 from .config import BSKY_HANDLE
 from .dedup import find_parent_post, is_already_posted
 from .embeds import build_link_card, fetch_og
-from .fallbacks import get_fallback_data
 from .images import compress_image_if_needed
 from .log import gha_error, gha_notice, gha_warning, log
 
@@ -134,7 +133,7 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
         # ── Image priority ────────────────────────────────────────────
         # 1. Video file (highest priority for pickup summon videos)
         # 2. Tweet images (including video thumbnails for non-pickup videos)
-        # 3. Local fallback
+        # 3. No media → text-only post (with OG link card when the text has a URL)
         video_path = tweet_data.get('videoPath')
 
         # Find images for this tweet (scraper saves as tweet_img_{tweetIdx}_{imgIdx}.jpg)
@@ -173,22 +172,8 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
                 images_to_upload.append(img_bytes)
 
         else:
-            # No images at all from Twitter → use local fallback
-            log("[FALLBACK]", "MAIN", "No tweet images available — using local fallback image")
-            chosen_fallback, fallback_alt = get_fallback_data(post_text)
-            final_alt_text = fallback_alt
-
-            if os.path.exists(chosen_fallback):
-                with Image.open(chosen_fallback) as img:
-                    w, h = img.size
-                    aspect_ratios = [{"width": w, "height": h}]
-                with open(chosen_fallback, 'rb') as f:
-                    img_bytes = f.read()
-                img_bytes = compress_image_if_needed(img_bytes)
-                images_to_upload = [img_bytes]
-                log("[OK]", "MAIN", f"Fallback image loaded: {chosen_fallback}")
-            else:
-                gha_error(f"Fallback image not found: {chosen_fallback}")
+            # No images at all from Twitter → text-only post (link card handled at send time)
+            log("[INFO]", "MAIN", "No tweet media available — posting text-only")
 
         # Truncation
         display_text = post_text

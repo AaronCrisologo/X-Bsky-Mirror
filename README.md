@@ -17,7 +17,6 @@ A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, do
 - **Rich formatting** — builds link facets for URLs and hashtags, attaches OpenGraph link cards for text-only posts
 - **Image compression** — quality reduction → resize to stay under Bluesky's 1.9 MB blob limit
 - **Bare-link filtering** — skips "More info →" link-only posts that have no real content (replies are exempt so thread parts still post)
-- **Fallback images** — uses a local placeholder image when a tweet has no media
 - **Designed for GitHub Actions** — structured logging with collapsible `::group::` sections (all logs to stderr, only JSON to stdout)
 
 ---
@@ -29,8 +28,7 @@ A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, do
 | **`scraper.js`** | Entry point — validates env, heals query IDs, fetches tweets via GraphQL, downloads media, outputs structured JSON to stdout |
 | **`lib/`** | Node modules — `api.js` (GraphQL calls), `auth.js` (cookie validation), `config.js` (query IDs, bearer token), `heal.js` (query ID refresh), `http.js` (HTTPS helpers), `media.js` (image/video downloads), `log.js` (GitHub Actions logging) |
 | **`bot.py`** | Entry point — spawns the scraper, then for each tweet: checks dedup, detects replies, compresses images, posts to Bluesky (images/video/text + link card), cleans up temp files |
-| **`xbmirror/`** | Python package — `config.py` (env vars), `posting.py` (tweet → Bluesky post logic), `dedup.py` (duplicate detection + parent lookup), `embeds.py` (OpenGraph link cards), `images.py` (compression), `fallbacks.py` (placeholder images), `scraper_runner.py` (subprocess bridge), `log.py` (logging helpers) |
-| **`assets/images/`** | Fallback images used when a tweet has no media |
+| **`xbmirror/`** | Python package — `config.py` (env vars), `posting.py` (tweet → Bluesky post logic), `dedup.py` (duplicate detection + parent lookup), `embeds.py` (OpenGraph link cards), `images.py` (compression), `scraper_runner.py` (subprocess bridge), `log.py` (logging helpers) |
 
 ### Pipeline
 
@@ -64,7 +62,7 @@ bot.py (Python)
 
 - **Processing order**: Tweets are sorted by timestamp (oldest → newest) — the scraper's array is not strictly chronological (parents can appear before replies even when posted earlier)
 - **Age filter**: Tweets older than 2 days are skipped
-- **Media priority**: Video file > tweet images (including video thumbnails) > local fallback image
+- **Media priority**: Video file > tweet images (including video thumbnails); no media → text-only post (with link card when the text has a URL)
 - **Dedup normalization**: URLs, ellipsis (`...`), and extra whitespace are stripped before comparison so truncated reposts are caught
 - **Auto-heal priority**: `X_QUERY_ID_*` env vars → twitter-openapi remote fetch → x.com bundle scrape → hardcoded fallback
 - **Query ID self-healing**: If Twitter rotates GraphQL query IDs, the scraper fetches fresh ones from [twitter-openapi](https://github.com/fa0311/twitter-openapi) (~1s) or scrapes them from x.com JS bundles before making API calls
