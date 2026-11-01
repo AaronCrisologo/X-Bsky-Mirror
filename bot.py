@@ -83,7 +83,7 @@ def main():
             prev_posted_tweet_id = tweet_data.get('tweetId')
             log("[OK]", "MAIN", f"Successfully posted tweet {tweet_index+1}/{len(tweets)}")
         else:
-            if reason not in ("duplicate", "too_old", "no_timestamp", "empty_text", "skipped_bare_link", "parent_not_found"):
+            if reason not in ("duplicate", "too_old", "no_timestamp", "empty_text", "parent_not_found"):
                 skipped_count += 1
             log("[SKIP]", "MAIN", f"Tweet {tweet_index+1}/{len(tweets)} skipped: {reason}")
 

@@ -16,7 +16,6 @@ A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, do
 - **Reply threading** — no state file: the `last_posted_ref` fast-path is used only when `inReplyToStatusId` matches the `tweetId` just posted; otherwise the parent post is located by text match against recent Bluesky posts, using the parent tweet's text from the same scrape when available
 - **Rich formatting** — builds link facets for URLs and hashtags, attaches OpenGraph link cards for text-only posts
 - **Image compression** — quality reduction → resize to stay under Bluesky's 1.9 MB blob limit
-- **Bare-link filtering** — skips "More info →" link-only posts that have no real content (replies are exempt so thread parts still post)
 - **Designed for GitHub Actions** — structured logging with collapsible `::group::` sections (all logs to stderr, only JSON to stdout)
 
 ---
@@ -45,7 +44,6 @@ scraper.js (Node)
 bot.py (Python)
   ├─ parse scraper JSON
   ├─ for each tweet (oldest → newest):
-  │   ├─ skip if bare "More info" link
   │   ├─ skip if older than 2 days
   │   ├─ skip if duplicate (last 16 posts, normalized)
   │   ├─ if reply: verified fast-path or text-match parent lookup → thread under it

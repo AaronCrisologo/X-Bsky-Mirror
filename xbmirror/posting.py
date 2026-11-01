@@ -28,24 +28,6 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
     while "\n\n\n" in post_text:
         post_text = post_text.replace("\n\n\n", "\n\n")
 
-    # Skip if the tweet is just a bare "More info" link card with no real content.
-    # Must have at least one component after "More info" (arrow, URL, parenthetical, hashtag).
-    # Bare "More info" alone is NOT filtered (it may be a real post). Case-insensitive.
-    # Replies are exempt — "More info ➡️ ..." thread parts should post as threaded replies.
-    is_reply_early = tweet_data.get('isReply', False)
-    if not is_reply_early and re.match(
-        r'^More info\s*(?:'
-        + r'(?:➡️|›|→)\s*'
-        + r'|\([^)]*\)\s*'
-        + r'|(?:(?:https?://)?(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}\S*)\s*'
-        + r'|#\w+\s*'
-        + r')+$',
-        post_text,
-        re.IGNORECASE
-    ):
-        log("[INFO]", "MAIN", f"Post text is just a bare link ('{post_text[:60]}…') — skipping")
-        return False, "skipped_bare_link", None
-
     log("[NOTE]", "MAIN", f"Tweet {tweet_index+1}/{total_tweets} text ({len(post_text)} chars): {post_text[:150]}...")
 
     # Check timestamp
