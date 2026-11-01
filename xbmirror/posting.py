@@ -14,7 +14,7 @@ from .images import compress_image_if_needed
 from .log import gha_error, gha_notice, gha_warning, log
 
 
-def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref=None):
+def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref=None, prev_posted_tweet_id=None):
     """Process a single tweet: check dedup, download media, post to Bluesky, cleanup.
     Returns (success, reason, posted_ref) where posted_ref is (uri, cid) if posted, else None.
     """
@@ -82,8 +82,10 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
         reply_to_handle = tweet_data.get('replyToHandle')
         log("[INFO]", "REPLY", f"Tweet is a reply to @{reply_to_handle or '?'}")
 
-        # For threads, the last posted tweet is likely the parent
-        if last_posted_ref:
+        # Fast-path: use last posted tweet as parent ONLY if it is verifiably the actual
+        # parent (scraper-provided inReplyToStatusId matches the tweetId we just posted).
+        parent_tweet_id = tweet_data.get('inReplyToStatusId')
+        if last_posted_ref and parent_tweet_id and prev_posted_tweet_id and parent_tweet_id == prev_posted_tweet_id:
             parent_uri, parent_cid = last_posted_ref
             reply_ref = models.AppBskyFeedPost.ReplyRef(
                 parent=models.ComAtprotoRepoStrongRef.Main(uri=parent_uri, cid=parent_cid),
@@ -91,6 +93,8 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
             )
             log("[OK]", "REPLY", f"Using last posted tweet as parent: {parent_uri}")
         else:
+            if last_posted_ref:
+                log("[INFO]", "REPLY", "Last posted tweet is not this tweet's parent — falling back to text match")
             # Fall back to text matching against recent Bluesky posts
             parent_uri, parent_cid = find_parent_post(client, post_text)
             if parent_uri and parent_cid:
