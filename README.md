@@ -12,25 +12,13 @@ A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, do
 - **Downloads media** — high-res images (`?name=orig`) and direct MP4 videos (highest bitrate variant)
 - **Auto-heals query IDs** — refreshes Twitter GraphQL query IDs at runtime from a community source or by scraping x.com JS bundles, so it keeps working when Twitter rotates them
 - **Deduplicates** — checks the last 16 Bluesky posts (normalized text: URLs and ellipsis stripped); partial match on first 100 chars also triggers skip
-- **Thread support** — parses `TimelineTimelineModule` entries (Twitter's thread container), deduplicates by tweet ID, and threads follow-up replies under the main post via `last_posted_ref`
-- **Reply threading** — stateless text-match parent lookup in recent Bluesky posts, with a fast-path for same-run chains
+- **Thread support** — parses `TimelineTimelineModule` entries (Twitter's thread container), deduplicates by tweet ID, and threads follow-up replies under the main post
+- **Reply threading** — no state file: the `last_posted_ref` fast-path is used only when `inReplyToStatusId` matches the `tweetId` just posted; otherwise the parent post is located by text match against recent Bluesky posts, using the parent tweet's text from the same scrape when available
 - **Rich formatting** — builds link facets for URLs and hashtags, attaches OpenGraph link cards for text-only posts
 - **Image compression** — quality reduction → resize to stay under Bluesky's 1.9 MB blob limit
 - **Bare-link filtering** — skips "More info →" link-only posts that have no real content (replies are exempt so thread parts still post)
 - **Fallback images** — uses a local placeholder image when a tweet has no media
 - **Designed for GitHub Actions** — structured logging with collapsible `::group::` sections (all logs to stderr, only JSON to stdout)
-
----
-
-## 📌 Key Behaviors
-
-- **Processing order**: Tweets are processed oldest-to-newest (reversed from scraper output), so threads post in the right order
-- **Age filter**: Tweets older than 2 days are skipped
-- **Media priority**: Video file > tweet images (including video thumbnails) > local fallback image
-- **Dedup normalization**: URLs, ellipsis (`...`), and extra whitespace are stripped before comparison so truncated reposts are caught
-- **Auto-heal priority**: `X_QUERY_ID_*` env vars → twitter-openapi remote fetch → x.com bundle scrape → hardcoded fallback
-- **Query ID self-healing**: If Twitter rotates GraphQL query IDs, the scraper fetches fresh ones from [twitter-openapi](https://github.com/fa0311/twitter-openapi) (~1s) or scrapes them from x.com JS bundles before making API calls
-- The scraper writes images/videos to the current working directory as `tweet_img_{t}_{i}.jpg` / `tweet_video_{t}.mp4`; `bot.py` reads and deletes them after posting
 
 ---
 
@@ -62,13 +50,25 @@ bot.py (Python)
   │   ├─ skip if bare "More info" link
   │   ├─ skip if older than 2 days
   │   ├─ skip if duplicate (last 16 posts, normalized)
-  │   ├─ if reply: find parent post → thread under it
+  │   ├─ if reply: verified fast-path or text-match parent lookup → thread under it
   │   ├─ compress images / prepare video
   │   ├─ build rich text (URL facets, hashtags)
   │   ├─ post to Bluesky (video > images > text+link card)
   │   └─ cleanup temp files
   └─ summary
 ```
+
+---
+
+## 📌 Key Behaviors
+
+- **Processing order**: Tweets are sorted by timestamp (oldest → newest) — the scraper's array is not strictly chronological (parents can appear before replies even when posted earlier)
+- **Age filter**: Tweets older than 2 days are skipped
+- **Media priority**: Video file > tweet images (including video thumbnails) > local fallback image
+- **Dedup normalization**: URLs, ellipsis (`...`), and extra whitespace are stripped before comparison so truncated reposts are caught
+- **Auto-heal priority**: `X_QUERY_ID_*` env vars → twitter-openapi remote fetch → x.com bundle scrape → hardcoded fallback
+- **Query ID self-healing**: If Twitter rotates GraphQL query IDs, the scraper fetches fresh ones from [twitter-openapi](https://github.com/fa0311/twitter-openapi) (~1s) or scrapes them from x.com JS bundles before making API calls
+- The scraper writes images/videos to the current working directory as `tweet_img_{t}_{i}.jpg` / `tweet_video_{t}.mp4`; `bot.py` reads and deletes them after posting
 
 ---
 
@@ -254,7 +254,7 @@ The scraper outputs a single JSON object to **stdout**:
 | `UserTweets returned HTTP 403` | Query IDs may be stale — check `[HEAL]` logs; wait a few minutes and retry |
 | `No tweets found` | Account may be private, suspended, or handle changed |
 | `Post failed at API level` | Bluesky rate limit or invalid app password — check error in logs |
-| `Parent post not found` | Reply threading failed — the parent tweet may not have been posted yet or is older than 16 posts |
+| `Parent post not found` | Reply skipped — the parent tweet wasn't in this scrape or its Bluesky post is older than 16 posts |
 | Scraper timeout | Increase `FETCH_TIMEOUT` in `xbmirror/config.py` |
 
 ### Debugging Tips
@@ -262,18 +262,6 @@ The scraper outputs a single JSON object to **stdout**:
 - Check stderr for timestamped logs with `[INFO]`, `[OK]`, `[ERROR]`, `[WARN]` tags
 - In GitHub Actions, logs include `::group::` annotations for collapsible sections
 - Set `SIMULATION_MODE = True` in `xbmirror/config.py` to test without X cookies
-
----
-
-## 💻 Running Locally
-
-```bash
-# Python deps
-pip install atproto Pillow requests
-
-# Set env vars (see Configuration below), then:
-python bot.py
-```
 
 ---
 
