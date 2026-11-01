@@ -7,6 +7,11 @@ from .images import compress_image_if_needed
 from .log import log
 
 
+# External embed thumbs are stricter than image blobs (max 1,000,000 bytes);
+# compress to a margin under the limit.
+MAX_THUMB_SIZE = 900_000  # bytes
+
+
 # === Link card / embed helpers ===
 
 def fetch_og(url):
@@ -42,7 +47,7 @@ def build_link_card(client, url, og):
             req = urllib.request.Request(og_image, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=8) as r:
                 img_bytes = r.read()
-            img_bytes = compress_image_if_needed(img_bytes)
+            img_bytes = compress_image_if_needed(img_bytes, max_size=MAX_THUMB_SIZE)
             upload = client.upload_blob(img_bytes)
             thumb_blob = upload.blob
             log("[OK]", "OG", f"Thumbnail uploaded ({len(img_bytes) // 1024} KB)")
