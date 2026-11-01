@@ -56,7 +56,7 @@ def build_link_card(client, url, og):
 
     return models.AppBskyEmbedExternal.Main(
         external=models.AppBskyEmbedExternal.External(
-            uri=og.get('og:url') or url,
+            uri=url,
             title=og.get('og:title', ''),
             description=og.get('og:description', ''),
             thumb=thumb_blob,
