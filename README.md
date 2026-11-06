@@ -11,11 +11,12 @@ A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, do
 - **Scrapes tweets** from a target X account using the internal GraphQL API (no browser required)
 - **Downloads media** — high-res images (`?name=orig`) and direct MP4 videos (highest bitrate variant)
 - **Auto-heals query IDs** — refreshes Twitter GraphQL query IDs at runtime from a community source or by scraping x.com JS bundles, so it keeps working when Twitter rotates them
-- **Deduplicates** — checks the last 16 Bluesky posts (normalized text: URLs and ellipsis stripped); partial match on first 100 chars also triggers skip
+- **Deduplicates** — checks the last 16 Bluesky posts; ellipsis/whitespace normalized but URLs kept (canonicalized, facet hrefs preferred), so tweets differing only by link are distinguishable; partial match on first 100 chars also triggers skip, but only when URLs agree
 - **Thread support** — parses `TimelineTimelineModule` entries (Twitter's thread container), deduplicates by tweet ID, and threads follow-up replies under the main post
 - **Reply threading** — no state file: the `last_posted_ref` fast-path is used only when `inReplyToStatusId` matches the `tweetId` just posted; otherwise the parent post is located by text match against recent Bluesky posts, using the parent tweet's text from the same scrape when available
 - **Rich formatting** — builds link facets for URLs and hashtags, attaches OpenGraph link cards for text-only posts
-- **Image compression** — quality reduction → resize to stay under Bluesky's 1.9 MB blob limit
+- **Image compression** — quality reduction → resize to stay under Bluesky's 1.9 MB blob limit and link-card thumbs are capped at ~900 KB as it has a stricter limit
+- **Link cards** — text-only posts attach an OpenGraph card for the first URL in the text
 - **Designed for GitHub Actions** — structured logging with collapsible `::group::` sections (all logs to stderr, only JSON to stdout)
 
 ---
@@ -61,7 +62,7 @@ bot.py (Python)
 - **Processing order**: Tweets are sorted by timestamp (oldest → newest) — the scraper's array is not strictly chronological (parents can appear before replies even when posted earlier)
 - **Age filter**: Tweets older than 2 days are skipped
 - **Media priority**: Video file > tweet images (including video thumbnails); no media → text-only post (with link card when the text has a URL)
-- **Dedup normalization**: URLs, ellipsis (`...`), and extra whitespace are stripped before comparison so truncated reposts are caught
+- **Dedup normalization**: ellipsis (`...`) and extra whitespace are stripped before comparison, but URLs are kept canonicalized so truncated reposts are still caught while different links stay distinguishable
 - **Auto-heal priority**: `X_QUERY_ID_*` env vars → twitter-openapi remote fetch → x.com bundle scrape → hardcoded fallback
 - **Query ID self-healing**: If Twitter rotates GraphQL query IDs, the scraper fetches fresh ones from [twitter-openapi](https://github.com/fa0311/twitter-openapi) (~1s) or scrapes them from x.com JS bundles before making API calls
 - The scraper writes images/videos to the current working directory as `tweet_img_{t}_{i}.jpg` / `tweet_video_{t}.mp4`; `bot.py` reads and deletes them after posting
