@@ -86,16 +86,16 @@ def _parse_created_at(value):
 
 
 def _record_created_at(view):
-    """Creation time of an existing post, from the feed view's indexedAt
-    (record.createdAt as fallback)."""
+    """Creation time of an existing post, from the feed view's indexed_at
+    (record.created_at fallback; snake_case in this atproto version)."""
     post = getattr(view, 'post', None)
-    indexed_at = getattr(post, 'indexedAt', None)
+    indexed_at = getattr(post, 'indexed_at', None) or getattr(post, 'indexedAt', None)
     if indexed_at is not None:
         return indexed_at
     record = getattr(post, 'record', None)
     if isinstance(record, dict):
-        return record.get('createdAt')
-    return getattr(record, 'createdAt', None)
+        return record.get('createdAt') or record.get('created_at')
+    return getattr(record, 'created_at', None) or getattr(record, 'createdAt', None)
 
 
 def _texts_match(new_body, new_urls, existing_body, existing_urls):
@@ -131,10 +131,6 @@ def is_already_posted(client, new_text, tweet_time=None):
 
             if tweet_time is not None:
                 existing_time = _parse_created_at(_record_created_at(view))
-                if i == 1:
-                    _post = view.post
-                    _rec = getattr(_post, 'record', None)
-                    log("  →", "DEDUP", f"[DBG] post type={type(_post).__name__} post attrs={[a for a in dir(_post) if 'index' in a.lower() or 'creat' in a.lower()]} rec type={type(_rec).__name__} rec attrs={[a for a in dir(_rec) if 'index' in a.lower() or 'creat' in a.lower()]}")
                 if existing_time is not None and existing_time < tweet_time - DEDUP_TIME_MARGIN:
                     log("  →", "DEDUP", f"Existing #{i} predates this tweet — ignoring")
                     continue
