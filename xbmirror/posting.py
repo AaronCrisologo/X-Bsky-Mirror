@@ -43,14 +43,11 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
 
     # Check timestamp
     tweet_time_str = tweet_data.get('time', '')
-    is_recent = False
 
     if tweet_time_str and tweet_time_str != "post":
         tweet_datetime = datetime.datetime.fromisoformat(tweet_time_str.replace('Z', '+00:00'))
         now = datetime.datetime.now(datetime.timezone.utc)
-        if (now - tweet_datetime).days < 2:
-            is_recent = True
-        else:
+        if (now - tweet_datetime).days >= 2:
             gha_warning(f"Tweet is {(now - tweet_datetime).days} day(s) old — too old to post")
             return False, "too_old", None
     else:
