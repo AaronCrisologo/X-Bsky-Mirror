@@ -11,7 +11,7 @@ A lightweight scraper + bot that fetches tweets via X's internal GraphQL API, do
 - **Scrapes tweets** from a target X account using the internal GraphQL API (no browser required)
 - **Downloads media** — high-res images (`?name=orig`) and direct MP4 videos (highest bitrate variant)
 - **Auto-heals query IDs** — refreshes Twitter GraphQL query IDs at runtime from a community source or by scraping x.com JS bundles, so it keeps working when Twitter rotates them
-- **Deduplicates** — checks the last 16 Bluesky posts; ellipsis/whitespace normalized but URLs kept (canonicalized, facet hrefs preferred), so tweets differing only by link are distinguishable; partial match on first 100 chars also triggers skip, but only when URLs agree
+- **Deduplicates** — checks the last 16 Bluesky posts. URLs are kept (canonicalized) so different links don't collide, and posts older than the tweet itself are ignored and recurring identical tweets each mirror once
 - **Thread support** — parses `TimelineTimelineModule` entries (Twitter's thread container), deduplicates by tweet ID, and threads follow-up replies under the main post
 - **Reply threading** — no state file: the `last_posted_ref` fast-path is used only when `inReplyToStatusId` matches the `tweetId` just posted; otherwise the parent post is located by text match against recent Bluesky posts, using the parent tweet's text from the same scrape when available
 - **Rich formatting** — builds link facets for URLs and hashtags, attaches OpenGraph link cards for text-only posts

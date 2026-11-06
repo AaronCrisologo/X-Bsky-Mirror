@@ -62,7 +62,7 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
         log("[INFO]", "MAIN", "Empty post text — skipping")
         return False, "empty_text", None
 
-    if is_already_posted(client, post_text):
+    if is_already_posted(client, post_text, tweet_datetime):
         return False, "duplicate", None
 
     log("[NEW]", "MAIN", f"New content detected for tweet {tweet_index+1} — processing post")

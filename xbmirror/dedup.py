@@ -1,8 +1,11 @@
+import datetime
 import re
 import sys
 
 from .config import BSKY_HANDLE
 from .log import gha_error, log
+
+DEDUP_TIME_MARGIN = datetime.timedelta(minutes=10)
 
 
 # === Bluesky: Check if already posted ===
@@ -79,7 +82,7 @@ def _texts_match(new_body, new_urls, existing_body, existing_urls):
     return False
 
 
-def is_already_posted(client, new_text):
+def is_already_posted(client, new_text, tweet_time=None):
     try:
         log("[CHECK]", "DEDUP", "Checking last 16 posts in Bluesky feed...")
         response = client.get_author_feed(actor=BSKY_HANDLE, limit=16, filter='posts_with_replies')
@@ -99,6 +102,16 @@ def is_already_posted(client, new_text):
             existing_urls = _facet_urls(view) or _extract_urls(existing_text)
             log("  →", "DEDUP", f"Existing #{i} (raw):     {existing_raw[:100]}")
             log("  →", "DEDUP", f"Existing #{i} (normalized): {existing_text[:100]}")
+
+            if tweet_time is not None:
+                created_at = getattr(view.post.record, 'createdAt', None)
+                try:
+                    existing_time = datetime.datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                except (AttributeError, ValueError, TypeError):
+                    existing_time = None
+                if existing_time is not None and existing_time < tweet_time - DEDUP_TIME_MARGIN:
+                    log("  →", "DEDUP", f"Existing #{i} predates this tweet — ignoring")
+                    continue
 
             if _texts_match(new_body, new_urls, existing_body, existing_urls):
                 log("[WARN]", "DEDUP", f"Match found on post #{i} — skipping")
