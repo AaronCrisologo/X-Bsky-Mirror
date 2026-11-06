@@ -131,6 +131,10 @@ def is_already_posted(client, new_text, tweet_time=None):
 
             if tweet_time is not None:
                 existing_time = _parse_created_at(_record_created_at(view))
+                if i == 1:
+                    _post = view.post
+                    _rec = getattr(_post, 'record', None)
+                    log("  →", "DEDUP", f"[DBG] indexedAt={getattr(_post, 'indexedAt', '<missing>')!r} record.createdAt={getattr(_rec, 'createdAt', '<missing>')!r} parsed={existing_time!r} tweet_time={tweet_time!r}")
                 if existing_time is not None and existing_time < tweet_time - DEDUP_TIME_MARGIN:
                     log("  →", "DEDUP", f"Existing #{i} predates this tweet — ignoring")
                     continue
