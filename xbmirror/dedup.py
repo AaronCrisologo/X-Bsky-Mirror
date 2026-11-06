@@ -85,6 +85,13 @@ def _parse_created_at(value):
         return None
 
 
+def _record_created_at(record):
+    """getattr-friendly createdAt extraction (record may be a model or dict)."""
+    if isinstance(record, dict):
+        return record.get('createdAt')
+    return getattr(record, 'createdAt', None)
+
+
 def _texts_match(new_body, new_urls, existing_body, existing_urls):
     """Exact body match, or first-100-chars partial match — but only counts as a
     duplicate when the URLs also agree."""
@@ -117,8 +124,11 @@ def is_already_posted(client, new_text, tweet_time=None):
             log("  →", "DEDUP", f"Existing #{i} (normalized): {existing_text[:100]}")
 
             if tweet_time is not None:
-                existing_time = _parse_created_at(getattr(view.post.record, 'createdAt', None))
-                if existing_time is not None and existing_time < tweet_time - DEDUP_TIME_MARGIN:
+                created_raw = _record_created_at(view.post.record)
+                existing_time = _parse_created_at(created_raw)
+                if existing_time is None:
+                    log("  →", "DEDUP", f"Existing #{i} createdAt unparseable ({created_raw!r}) — time anchor skipped")
+                elif existing_time < tweet_time - DEDUP_TIME_MARGIN:
                     log("  →", "DEDUP", f"Existing #{i} predates this tweet — ignoring")
                     continue
 
