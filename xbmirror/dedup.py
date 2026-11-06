@@ -72,6 +72,19 @@ def _body_without_urls(text):
     return _normalize_for_dedup(text)
 
 
+def _parse_created_at(value):
+    try:
+        if isinstance(value, datetime.datetime):
+            parsed = value
+        else:
+            parsed = datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _texts_match(new_body, new_urls, existing_body, existing_urls):
     """Exact body match, or first-100-chars partial match — but only counts as a
     duplicate when the URLs also agree."""
@@ -104,11 +117,7 @@ def is_already_posted(client, new_text, tweet_time=None):
             log("  →", "DEDUP", f"Existing #{i} (normalized): {existing_text[:100]}")
 
             if tweet_time is not None:
-                created_at = getattr(view.post.record, 'createdAt', None)
-                try:
-                    existing_time = datetime.datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                except (AttributeError, ValueError, TypeError):
-                    existing_time = None
+                existing_time = _parse_created_at(getattr(view.post.record, 'createdAt', None))
                 if existing_time is not None and existing_time < tweet_time - DEDUP_TIME_MARGIN:
                     log("  →", "DEDUP", f"Existing #{i} predates this tweet — ignoring")
                     continue
