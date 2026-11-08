@@ -45,7 +45,7 @@ scraper.js (Node)
 bot.py (Python)
   ├─ parse scraper JSON
   ├─ for each tweet (oldest → newest):
-  │   ├─ skip if older than 2 days
+  │   ├─ skip if older than 6 hours
   │   ├─ skip if duplicate (last 16 posts, normalized)
   │   ├─ if reply: verified fast-path or text-match parent lookup → thread under it
   │   ├─ compress images / prepare video
@@ -60,7 +60,7 @@ bot.py (Python)
 ## 📌 Key Behaviors
 
 - **Processing order**: Tweets are sorted by timestamp (oldest → newest) — the scraper's array is not strictly chronological (parents can appear before replies even when posted earlier)
-- **Age filter**: Tweets older than 2 days are skipped
+- **Age filter**: Tweets older than 6 hours are skipped
 - **Media priority**: Video file > tweet images (including video thumbnails); no media → text-only post (with link card when the text has a URL)
 - **Dedup normalization**: ellipsis (`...`) and extra whitespace are stripped before comparison, but URLs are kept canonicalized so truncated reposts are still caught while different links stay distinguishable
 - **Auto-heal priority**: `X_QUERY_ID_*` env vars → twitter-openapi remote fetch → x.com bundle scrape → hardcoded fallback

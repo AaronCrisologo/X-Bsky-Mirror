@@ -47,8 +47,9 @@ def process_tweet(client, tweet_data, tweet_index, total_tweets, last_posted_ref
     if tweet_time_str and tweet_time_str != "post":
         tweet_datetime = datetime.datetime.fromisoformat(tweet_time_str.replace('Z', '+00:00'))
         now = datetime.datetime.now(datetime.timezone.utc)
-        if (now - tweet_datetime).days >= 2:
-            gha_warning(f"Tweet is {(now - tweet_datetime).days} day(s) old — too old to post")
+        if (now - tweet_datetime).total_seconds() >= 6 * 3600:
+            age_hours = (now - tweet_datetime).total_seconds() / 3600
+            gha_warning(f"Tweet is {age_hours:.1f} hour(s) old — too old to post")
             return False, "too_old", None
     else:
         gha_warning("No valid timestamp in tweet data")
